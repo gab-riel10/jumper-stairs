@@ -24,9 +24,9 @@ def stairs_state(
     del mirror_kind
     cmd = env.command_manager.get_term(command_name)
     stairs = cmd.stairs
-    k = cmd.k_rear
+    k = cmd.k_base
     rise = cmd.lowest_rise(k).clamp(min=-1.0, max=1.0) / rise_scale
-    ahead = (stairs.next_riser_x(k) - cmd.rear_x()) / stairs.tread
+    ahead = (stairs.next_riser_x(k) - cmd.base_x()) / stairs.tread
     return torch.stack(
         [
             cmd.in_flight.float(),

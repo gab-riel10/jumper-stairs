@@ -33,7 +33,7 @@ def fell_off(env, command_name: str = "stairs", margin: float = 0.05) -> torch.T
     cmd = env.command_manager.get_term(command_name)
     robot: Entity = env.scene["robot"]
     z = robot.data.root_link_pos_w[:, 2]
-    floor = cmd.tread_z(cmd.k_rear) - 2.0 * cmd.riser - margin
+    floor = cmd.tread_z(cmd.k_base) - 2.0 * cmd.riser - margin
     return z < floor
 
 

@@ -11,12 +11,26 @@ the same arrangement).
 
 ## Which step the robot is on
 
-**The rear feet decide**, not the base. The robot has climbed a step when the
-hindmost of its two rear foot sites (`LR`, `RR`) is over the next tread: that is
-the last part of it to get up, and a body that leans over the edge with its rear
-legs still below has not climbed anything. `Staircase.step_index` turns an x into
-a tread number from the flight's own geometry, so there is no ray cast and no
-threshold on heights.
+**The base decides.** The robot is on tread `k` when its base is over it:
+`Staircase.step_index` turns the base's x into a tread number from the
+flight's own geometry, so there is no ray cast and no threshold on heights.
+The first version read the hindmost rear foot instead -- "the last part of it
+to get up" -- and that measured the posture, not the climb: the feet are 0.14
+m behind the base at HOME and further in a crouch or a landing, so a robot
+standing on the rear half of a tread had its rear feet over the tread below,
+and every spawn on tread `k` (`events.py` puts the base at the tread's
+middle) started with `k_best` one ahead of what the feet read. Measured with
+the warm-start policy (native:cpu, 16 envs, 400 steps, 2026-10-27): 114
+touchdowns, 0 treads paid, and the rear-foot tread *fell* by one on the
+landing in two of the first eight environments. On Kaggle the same code ran
+640 iterations at `steps_by_flight` 0.0000 exactly. The treads the first
+session's policies collected (1.5 an episode, 2026-10-27) were the other
+face of the same reading: a jump on the spot that drifted the dangling rear
+foot forward over the riser line it already overhung.
+
+The rear feet still decide **where a flight took off from** (`k_takeoff`,
+which `lowest_rise` measures the apex against): that is the surface the feet
+pushed off, and it is a height, not a credit.
 
 ## A jump, and what it earns
 
@@ -119,14 +133,16 @@ class StairsCommand(CommandTerm):
         dev = self.device
         zeros = lambda dtype=torch.float32: torch.zeros(n, dtype=dtype, device=dev)  # noqa: E731
 
-        #: Tread under the hindmost rear foot, now.
-        self.k_rear = zeros(torch.long)
-        #: Tread it took off from, for the flight in progress.
+        #: Tread under the base, now: the tread the robot is on.
+        self.k_base = zeros(torch.long)
+        #: Tread under the hindmost rear foot: where a push comes from.
+        self.k_feet = zeros(torch.long)
+        #: Tread the feet took off from, for the flight in progress.
         self.k_takeoff = zeros(torch.long)
         self.in_flight = zeros(torch.bool)
         #: Peak of `lowest_rise` during the flight in progress.
         self.apex = zeros()
-        #: The highest tread the rear feet have stood on this episode: the
+        #: The highest tread the base has been over this episode: the
         #: high-water mark every credit is measured against.
         self.k_best = zeros(torch.long)
         #: Held for exactly one step after the event, for the rewards.
@@ -173,6 +189,10 @@ class StairsCommand(CommandTerm):
             return
         self.riser.copy_(self.stairs.riser_of_level(levels, self.generator_cfg))
 
+    def base_x(self) -> torch.Tensor:
+        """x of the base, from the spawn origin."""
+        return self.robot.data.root_link_pos_w[:, 0] - self._env.scene.env_origins[:, 0]
+
     def rear_x(self) -> torch.Tensor:
         """x of the hindmost rear foot, from the spawn origin."""
         data = self.robot.data
@@ -203,7 +223,7 @@ class StairsCommand(CommandTerm):
 
     @property
     def on_top(self) -> torch.Tensor:
-        return self.k_rear >= self.stairs.num_steps
+        return self.k_base >= self.stairs.num_steps
 
     @property
     def arrived(self) -> torch.Tensor:
@@ -216,7 +236,8 @@ class StairsCommand(CommandTerm):
         self._refresh_riser()
         spawn = getattr(self._env, "_stairs_spawn_step", None)
         k = spawn[env_ids] if spawn is not None else torch.zeros_like(env_ids)
-        self.k_rear[env_ids] = k.long()
+        self.k_base[env_ids] = k.long()
+        self.k_feet[env_ids] = k.long()
         self.k_takeoff[env_ids] = k.long()
         self.in_flight[env_ids] = False
         self.apex[env_ids] = 0.0
@@ -229,7 +250,7 @@ class StairsCommand(CommandTerm):
         self.grounded_steps[env_ids] = 0.0
 
     def _update_metrics(self) -> None:
-        self.metrics["max_step"].copy_(torch.maximum(self.metrics["max_step"], self.k_rear.float()))
+        self.metrics["max_step"].copy_(torch.maximum(self.metrics["max_step"], self.k_base.float()))
         self.metrics["reached_top"].copy_(self.arrived.float())
         jumped = self.metrics["steps_by_flight"]
         crawled = self.metrics["steps_crawled"]
@@ -249,12 +270,13 @@ class StairsCommand(CommandTerm):
         self.touchdown.zero_()
 
         airborne = self.airborne()
-        k_new = self.stairs.step_index(self.rear_x())
+        k_new = self.stairs.step_index(self.base_x())
+        k_feet = self.stairs.step_index(self.rear_x())
 
         takeoff = ~self.in_flight & airborne
         touchdown = self.in_flight & ~airborne
-        # Takeoff: remember the tread, start the apex from nothing.
-        self.k_takeoff.copy_(torch.where(takeoff, self.k_rear, self.k_takeoff))
+        # Takeoff: remember the tread under the feet, start the apex from nothing.
+        self.k_takeoff.copy_(torch.where(takeoff, self.k_feet, self.k_takeoff))
         self.apex.masked_fill_(takeoff, 0.0)
         self.in_flight |= takeoff
 
@@ -262,7 +284,7 @@ class StairsCommand(CommandTerm):
         self.apex.copy_(torch.where(self.in_flight, torch.maximum(self.apex, rise), self.apex))
 
         # Credit is for **new ground only**: treads beyond `k_best`, the highest
-        # tread the rear feet have stood on this episode. The first version paid
+        # tread the base has been over this episode. The first version paid
         # every tread crossed in flight and refunded every tread lost on the
         # ground, and the sighted policy found the loop in it within five
         # thousand iterations (Kaggle, 2026-10-27, `jumper.stairs_sighted` at
@@ -288,7 +310,8 @@ class StairsCommand(CommandTerm):
         self.climbed_net += self.jump_gain
         if self.cfg.free_climb:
             self.climbed_net += self.crawl_gain
-        self.k_rear.copy_(k_new)
+        self.k_base.copy_(k_new)
+        self.k_feet.copy_(k_feet)
 
         grounded = ~airborne
         self.grounded_steps.copy_(torch.where(grounded, self.grounded_steps + 1.0, torch.zeros_like(self.grounded_steps)))
