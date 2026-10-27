@@ -148,6 +148,14 @@ class StairsCommand(CommandTerm):
         #: Held for exactly one step after the event, for the rewards.
         self.jump_gain = zeros()
         self.crawl_gain = zeros()
+        #: Metres of new ground the base landed on, beyond `x_best`, at a
+        #: touchdown; one step. The dense half of the tread credit: a jump that
+        #: lands 2 cm further than the robot has ever been pays for those 2 cm,
+        #: where the tread credit pays nothing until a riser line is crossed.
+        #: Walking forward raises `x_best` without pay or charge, so a jump pays
+        #: only for ground the feet did not reach first.
+        self.progress_gain = zeros()
+        self.x_best = zeros()
         self.touchdown = zeros(torch.bool)
         #: Running total: jumped minus crawled, this episode.
         self.climbed_net = zeros()
@@ -169,6 +177,7 @@ class StairsCommand(CommandTerm):
         self.metrics["apex_rise"] = zeros()
         self.metrics["flight_s"] = zeros()
         self.metrics["max_step"] = zeros()
+        self.metrics["progress_m"] = zeros()
         self.metrics["reached_top"] = zeros()
         self.metrics["crawl_ratio"] = zeros()
         self.metrics["riser"] = zeros()
@@ -244,6 +253,10 @@ class StairsCommand(CommandTerm):
         self.k_best[env_ids] = k.long()
         self.jump_gain[env_ids] = 0.0
         self.crawl_gain[env_ids] = 0.0
+        self.progress_gain[env_ids] = 0.0
+        # The spawn's x is not readable yet (sites and body not forwarded); the
+        # first update sets the mark to wherever the base is.
+        self.x_best[env_ids] = -1.0e9
         self.touchdown[env_ids] = False
         self.climbed_net[env_ids] = 0.0
         self.top_steps[env_ids] = 0.0
@@ -267,10 +280,12 @@ class StairsCommand(CommandTerm):
         # The one-step flags were read by this step's rewards; clear them.
         self.jump_gain.zero_()
         self.crawl_gain.zero_()
+        self.progress_gain.zero_()
         self.touchdown.zero_()
 
         airborne = self.airborne()
-        k_new = self.stairs.step_index(self.base_x())
+        x_base = self.base_x()
+        k_new = self.stairs.step_index(x_base)
         k_feet = self.stairs.step_index(self.rear_x())
 
         takeoff = ~self.in_flight & airborne
@@ -306,6 +321,12 @@ class StairsCommand(CommandTerm):
         self.touchdown.copy_(touchdown)
         self.in_flight &= ~touchdown
 
+        # Metres landed on beyond the high-water mark, paid at a jump's touchdown;
+        # on the ground the mark follows the base for free.
+        ahead = (x_base - self.x_best).clamp(min=0.0)
+        self.progress_gain.copy_(torch.where(jumped, ahead, torch.zeros_like(ahead)))
+        self.x_best.copy_(torch.where(settled, torch.maximum(self.x_best, x_base), self.x_best))
+
         # Treads earned by jumping, this episode: monotone, never refunded.
         self.climbed_net += self.jump_gain
         if self.cfg.free_climb:
@@ -320,6 +341,7 @@ class StairsCommand(CommandTerm):
         # Episode metrics.
         m = self.metrics
         m["steps_by_flight"] += self.jump_gain.clamp(min=0.0)
+        m["progress_m"] += self.progress_gain
         m["steps_crawled"] += self.crawl_gain.clamp(min=0.0)
         m["jumps"] += jumped.float()
         m["apex_rise"].copy_(torch.where(jumped, torch.maximum(m["apex_rise"], self.apex), m["apex_rise"]))

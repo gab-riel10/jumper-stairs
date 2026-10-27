@@ -138,6 +138,17 @@ MAX_START_STEP = 7
 #: is what the stream pays in eight steps: the next tread has to be worth
 #: taking at once, not only over the rest of the episode.
 STEP_UP_WEIGHT = 8.0
+#: Per metre of new ground the base lands on at a jump's touchdown, beyond the
+#: furthest it has been this episode: the tread credit's rate (8 per 0.4 m),
+#: paid for the part of a tread as well. Added after 2.25 h of the second
+#: Kaggle session (2026-10-27, `jumper.stairs_sighted` and `_free`, 2048 envs,
+#: 1700 iterations): with the tread index on the base the credit was honest
+#: and never paid -- `steps_by_flight` 0.0000 from iteration 83 on, reward
+#: creeping from -1.5 to 0.5 as the policies learnt to stand. A jump on the
+#: spot earned about what standing did and nothing pointed forward: the tread
+#: credit needs 0.2 m of drift before it says anything, and 20 joints of noise
+#: do not find 0.2 m. This pays the first centimetre.
+PROGRESS_PER_M = 20.0
 #: Per tread of net climb, every step for the rest of the episode. This is the
 #: term that makes a jump worth its risk: one tread gained with 6 s to go pays
 #: 1200 steps of 1.0, against the 1.0 a step `upright` pays for standing still.
@@ -159,7 +170,8 @@ FLIGHT_HEIGHT_SCALE = 0.10
 #: from 0.5 after the first 10 h on Kaggle (2026-10-27, blind task, 2048
 #: envs): 6.8 jumps an episode with the lowest point 17.8 cm up, for 1.5
 #: treads -- it jumped on the spot. The push is there; forward is what to pay.
-FLIGHT_FORWARD_WEIGHT = 2.0
+#: And from 2.0 to 4.0 with `PROGRESS_PER_M`, for the same reason.
+FLIGHT_FORWARD_WEIGHT = 4.0
 #: Lowered from 1.0 with `SETTLE_WEIGHT` and `TIME_COST_WEIGHT` after the first
 #: 10 h on Kaggle (2026-10-27): standing at HOME paid about 10 an episode
 #: (8 s x (1.0 + 0.3 - 0.05)) against about 14 for the 1.2 treads the policy
@@ -171,8 +183,12 @@ UPRIGHT_SIGMA_SQ = 0.10
 #: crouch before a push is far from HOME, and this must not price it out.
 SETTLE_WEIGHT = 0.1
 SETTLE_SIGMA_SQ = 0.05
-#: Every step. Standing at HOME then nets 0.4 - 0.2; a fall ends the stream.
-TIME_COST_WEIGHT = -0.2
+#: Every step. Standing at HOME then nets 0.4 - 0.5 a second: a loss, and
+#: by less than a jump on the spot earns in `flight_height`, so the jump the
+#: warm start brings is kept alive until something pays it. At -0.2 (second
+#: Kaggle session, 2026-10-27) standing netted +0.2 a second against a jump
+#: at about break-even, and in 1700 iterations both policies stopped jumping.
+TIME_COST_WEIGHT = -0.5
 LATERAL_DRIFT_WEIGHT = -0.5
 LATERAL_DRIFT_SCALE = 0.20
 HEADING_WEIGHT = -0.5
@@ -471,6 +487,8 @@ def env_cfg(
     cfg.rewards = {
         "step_up_in_flight": RewardTermCfg(func=R.step_up_in_flight, weight=STEP_UP_WEIGHT,
                                            params={"command_name": "stairs"}),
+        "flight_progress": RewardTermCfg(func=R.flight_progress, weight=PROGRESS_PER_M,
+                                         params={"command_name": "stairs"}),
         "climbed_stream": RewardTermCfg(func=R.climbed_stream, weight=CLIMBED_STREAM_WEIGHT,
                                         params={"command_name": "stairs"}),
         "crawl": RewardTermCfg(func=R.crawl, weight=STEP_UP_WEIGHT if free_climb else CRAWL_WEIGHT,

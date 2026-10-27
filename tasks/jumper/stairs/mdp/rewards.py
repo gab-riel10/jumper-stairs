@@ -32,6 +32,15 @@ def step_up_in_flight(env, command_name: str = "stairs") -> torch.Tensor:
     return _cmd(env, command_name).jump_gain
 
 
+def flight_progress(env, command_name: str = "stairs") -> torch.Tensor:
+    """Metres of new ground the base landed on at the touchdown of a jump,
+    beyond the furthest it has been this episode; paid once. The dense half of
+    `step_up_in_flight`: a jump that drifts 2 cm further than any before pays
+    for the 2 cm, where the tread credit waits for a riser line. Mount it at
+    the tread credit's rate per tread (`PROGRESS_PER_M`)."""
+    return _cmd(env, command_name).progress_gain
+
+
 def climbed_stream(env, command_name: str = "stairs") -> torch.Tensor:
     """Treads earned by jumping so far this episode, paid every step. Monotone:
     nothing walked back down is refunded, nothing crawled is counted."""
@@ -146,6 +155,7 @@ __all__ = [
     "crawl",
     "flight_forward",
     "flight_height",
+    "flight_progress",
     "heading",
     "illegal_contact",
     "lateral_drift",
