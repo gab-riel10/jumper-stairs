@@ -12,7 +12,8 @@ A robot is promoted when its rear feet gained at least `promote_steps` treads
 It is demoted after `demote_falls` falls in a row, or `demote_zeros` episodes
 in a row that were long enough to have tried and gained nothing in flight.
 Crawled treads count for nothing either way, so a policy that walks up never
-earns a taller riser to walk up.
+earns a taller riser to walk up -- except with `count_crawled`, which
+`jumper.stairs_free` passes because there a tread is a tread.
 
 The counters are cleared only when the level really changes. The first
 version cleared them on every demotion as well, and a demotion is asked for
@@ -62,6 +63,7 @@ class StairsLevels:
         demote_falls: int = 2,
         demote_zeros: int = 4,
         min_steps: int = 200,
+        count_crawled: bool = False,
     ) -> dict:
         terrain = getattr(env.scene, "terrain", None)
         if terrain is None or getattr(terrain.cfg, "terrain_generator", None) is None:
@@ -73,6 +75,8 @@ class StairsLevels:
 
         cmd = env.command_manager.get_term(command_name)
         jumped = cmd.metrics["steps_by_flight"][env_ids]
+        if count_crawled:  # `jumper.stairs_free`: a tread is progress however it was gained
+            jumped = jumped + cmd.metrics["steps_crawled"][env_ids]
         if hasattr(env, "reset_terminated"):
             fell = env.reset_terminated[env_ids]
         else:

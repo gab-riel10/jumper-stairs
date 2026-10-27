@@ -70,6 +70,7 @@ from .jumper import ref_free_jump  # noqa: F401,E402
 from .jumper import ripple  # noqa: F401,E402
 from .jumper import stairs  # noqa: F401,E402
 from .jumper import stairs_sighted  # noqa: F401,E402
+from .jumper import stairs_free  # noqa: F401,E402
 from .jumper import swing  # noqa: F401,E402
 from .jumper import tetrapod  # noqa: F401,E402
 from .jumper import tripod  # noqa: F401,E402

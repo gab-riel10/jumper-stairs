@@ -144,6 +144,9 @@ CLIMBED_STREAM_WEIGHT = 1.0
 #: Per new tread gained with a foot down: what the jump's impulse pays, with
 #: the sign turned. A crawled tread also never enters the stream.
 CRAWL_WEIGHT = -8.0
+#: Once, on the step the robot has settled on the top platform: the flight as a
+#: goal (arXiv 2402.06143's position framing), worth two and a half treads.
+REACHED_TOP_WEIGHT = 20.0
 #: The lowest point's height above the takeoff tread, per 0.10 m, in flight --
 #: `jumper.ref_free_jump`'s `flight_height` at half its weight: here the
 #: landing pays, the arc only has to clear the riser.
@@ -247,7 +250,8 @@ def _pin_row(generator, row: str):
 
 
 def env_cfg(
-    asset: Path | None = None, play: bool = False, sighted: bool = False, stairs_row: str = ""
+    asset: Path | None = None, play: bool = False, sighted: bool = False, stairs_row: str = "",
+    free_climb: bool = False,
 ) -> ManagerBasedRlEnvCfg:
     """Stairs by jumping.
 
@@ -258,6 +262,9 @@ def env_cfg(
             this; `jumper.stairs` never does, because the export would refuse it.
         stairs_row: `--stairs-row`, a curriculum row to pin every flight to; empty
             is the ladder. The curriculum then has nowhere to move anyone.
+        free_climb: `jumper.stairs_free`: a crawled tread pays what a jumped one
+            does, enters the stream and counts for the curriculum. How the robot
+            gets up is its own business; only the body on the terrain still costs.
     """
     cfg = make_velocity_env_cfg()
 
@@ -395,6 +402,7 @@ def env_cfg(
             entity_name="robot",
             stairs=STAIRS,
             settle_steps=SETTLE_STEPS,
+            free_climb=free_climb,
         )
     }
 
@@ -405,7 +413,10 @@ def env_cfg(
                                            params={"command_name": "stairs"}),
         "climbed_stream": RewardTermCfg(func=R.climbed_stream, weight=CLIMBED_STREAM_WEIGHT,
                                         params={"command_name": "stairs"}),
-        "crawl": RewardTermCfg(func=R.crawl, weight=CRAWL_WEIGHT, params={"command_name": "stairs"}),
+        "crawl": RewardTermCfg(func=R.crawl, weight=STEP_UP_WEIGHT if free_climb else CRAWL_WEIGHT,
+                               params={"command_name": "stairs"}),
+        "reached_top": RewardTermCfg(func=R.reached_top, weight=REACHED_TOP_WEIGHT,
+                                     params={"command_name": "stairs"}),
         "flight_height": RewardTermCfg(func=R.flight_height, weight=FLIGHT_HEIGHT_WEIGHT,
                                        params={"command_name": "stairs", "scale": FLIGHT_HEIGHT_SCALE}),
         "flight_forward": RewardTermCfg(func=R.flight_forward, weight=FLIGHT_FORWARD_WEIGHT,
@@ -432,7 +443,8 @@ def env_cfg(
             func=stairs_mdp.curriculum.StairsLevels,
             params={"command_name": "stairs", "promote_steps": PROMOTE_STEPS,
                     "window": WINDOW_EPISODES, "demote_falls": DEMOTE_FALLS,
-                    "demote_zeros": DEMOTE_ZEROS, "min_steps": MIN_EPISODE_STEPS},
+                    "demote_zeros": DEMOTE_ZEROS, "min_steps": MIN_EPISODE_STEPS,
+                    "count_crawled": free_climb},
         ),
     }
 

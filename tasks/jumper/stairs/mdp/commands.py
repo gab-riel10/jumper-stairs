@@ -39,8 +39,9 @@ it is never paid afterwards. Nothing is refunded and nothing is paid twice:
 walking back down and jumping the same tread again earns nothing, which is
 what closed the loop the first version had (see `_update_command`).
 
-`climbed_net` is the running total of treads earned by jumping, per episode,
-monotone, and `rewards.climbed_stream` pays it every step. That stream, not
+`climbed_net` is the running total of treads earned by jumping (and, with
+`free_climb`, by crawling too), per episode, monotone, and
+`rewards.climbed_stream` pays it every step. That stream, not
 the impulse, is what makes a jump worth its risk: a step gained early pays for
 the rest of the episode, as `jumper.ref_free_jump`'s latched apex does, and an
 episode that stands still at HOME earns the upright and settle terms alone.
@@ -94,6 +95,11 @@ class StairsCommandCfg(CommandTermCfg):
     be a jump rather than a hop."""
     settle_steps: int = 20
     """Consecutive grounded steps on the top platform that count as arrived."""
+    free_climb: bool = False
+    """Count crawled treads in `climbed_net` too. `jumper.stairs_free` sets it:
+    there a tread is a tread however the rear feet got onto it, and the task's
+    `crawl` term pays it instead of charging it. The metrics stay as they are,
+    so `crawl_ratio` still says how the climbing was done."""
 
     def __post_init__(self):
         self.class_type = StairsCommand
@@ -280,6 +286,8 @@ class StairsCommand(CommandTerm):
 
         # Treads earned by jumping, this episode: monotone, never refunded.
         self.climbed_net += self.jump_gain
+        if self.cfg.free_climb:
+            self.climbed_net += self.crawl_gain
         self.k_rear.copy_(k_new)
 
         grounded = ~airborne

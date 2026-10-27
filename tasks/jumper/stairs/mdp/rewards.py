@@ -41,8 +41,17 @@ def climbed_stream(env, command_name: str = "stairs") -> torch.Tensor:
 def crawl(env, command_name: str = "stairs") -> torch.Tensor:
     """New treads the rear feet reached with a foot on the ground (or at the
     touchdown of a hop), this step. Charged once and never paid afterwards.
-    Mount it with a negative weight."""
+    Mount it with a negative weight -- or, in `jumper.stairs_free`, with the
+    jump's weight: there how a tread is gained is the robot's business."""
     return _cmd(env, command_name).crawl_gain
+
+
+def reached_top(env, command_name: str = "stairs") -> torch.Tensor:
+    """1 on the step the robot has stood on the top platform for `settle_steps`
+    -- the step the `reached_top` termination ends the episode on, so it is
+    paid once. The position-based framing of blind stair climbing (Ascento,
+    arXiv 2402.06143): the flight is the goal, not the treads."""
+    return _cmd(env, command_name).arrived.float()
 
 
 def flight_height(env, command_name: str = "stairs", scale: float = 0.10) -> torch.Tensor:
@@ -141,6 +150,7 @@ __all__ = [
     "illegal_contact",
     "lateral_drift",
     "leg_collision",
+    "reached_top",
     "settle_pose",
     "step_up_in_flight",
     "time_cost",
