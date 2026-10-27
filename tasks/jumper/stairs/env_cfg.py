@@ -129,16 +129,21 @@ ELEVATED_FRACTION = 0.5
 MAX_START_STEP = 7
 
 # ── Rewards ──────────────────────────────────────────────────────────────────
-#: Per tread the rear feet gained in a jump, once, at the touchdown.
-STEP_UP_WEIGHT = 4.0
+#: Per new tread the rear feet gained in a jump, once, at the touchdown.
+#: Raised from 4 after the first 10 h on Kaggle (2026-10-27, both tasks, 2048
+#: envs): the blind policy settled at 1.0-1.5 treads per 8 s episode with the
+#: stream paying for the first one and nothing pressing for the next. Eight
+#: is what the stream pays in eight steps: the next tread has to be worth
+#: taking at once, not only over the rest of the episode.
+STEP_UP_WEIGHT = 8.0
 #: Per tread of net climb, every step for the rest of the episode. This is the
 #: term that makes a jump worth its risk: one tread gained with 6 s to go pays
 #: 1200 steps of 1.0, against the 1.0 a step `upright` pays for standing still.
 #: `jumper.ref_free_jump` pays its latched apex the same way.
 CLIMBED_STREAM_WEIGHT = 1.0
-#: Per tread gained with a foot down: the same as the impulse the jump earns,
-#: with the sign turned. A crawled tread also never enters the stream.
-CRAWL_WEIGHT = -4.0
+#: Per new tread gained with a foot down: what the jump's impulse pays, with
+#: the sign turned. A crawled tread also never enters the stream.
+CRAWL_WEIGHT = -8.0
 #: The lowest point's height above the takeoff tread, per 0.10 m, in flight --
 #: `jumper.ref_free_jump`'s `flight_height` at half its weight: here the
 #: landing pays, the arc only has to clear the riser.
@@ -147,14 +152,19 @@ FLIGHT_HEIGHT_SCALE = 0.10
 #: Forward speed in flight, per 1 m/s. A vertical jump gains no tread; this is
 #: the gradient from the warm-started vertical jump towards a bound.
 FLIGHT_FORWARD_WEIGHT = 0.5
-UPRIGHT_WEIGHT = 1.0
+#: Lowered from 1.0 with `SETTLE_WEIGHT` and `TIME_COST_WEIGHT` after the first
+#: 10 h on Kaggle (2026-10-27): standing at HOME paid about 10 an episode
+#: (8 s x (1.0 + 0.3 - 0.05)) against about 14 for the 1.2 treads the policy
+#: took, and it took no more. Standing now nets about 1.6 an episode; one
+#: tread with 6 s to go pays 8 + 6.
+UPRIGHT_WEIGHT = 0.3
 UPRIGHT_SIGMA_SQ = 0.10
 #: Towards HOME on the ground. Lower than `jumper.ref_free_jump`'s 1.0: the
 #: crouch before a push is far from HOME, and this must not price it out.
-SETTLE_WEIGHT = 0.3
+SETTLE_WEIGHT = 0.1
 SETTLE_SIGMA_SQ = 0.05
-#: Every step. Standing at HOME then nets 1.3 - 0.05; a fall ends the stream.
-TIME_COST_WEIGHT = -0.05
+#: Every step. Standing at HOME then nets 0.4 - 0.2; a fall ends the stream.
+TIME_COST_WEIGHT = -0.2
 LATERAL_DRIFT_WEIGHT = -0.5
 LATERAL_DRIFT_SCALE = 0.20
 HEADING_WEIGHT = -0.5
@@ -174,8 +184,20 @@ SETTLE_STEPS = 20
 EPISODE_S = 8.0
 
 # ── Curriculum ───────────────────────────────────────────────────────────────
+#: Treads gained in flight over the last `WINDOW_EPISODES` episodes at the
+#: level, and the robot moves to the next row: half a tread an episode, which
+#: the first 10 h on Kaggle (2026-10-27, 2048 envs) showed the blind policy
+#: doing from the start (1.0-1.5 an episode) while the gate of that run -- two
+#: in one episode, after six quiet episodes in a row -- never opened once
+#: (`mdp/curriculum.py`). The rungs are 1.4 cm apart; what the curriculum has
+#: to find out is the height, not the count.
 PROMOTE_STEPS = 2.0
-DWELL_EPISODES = 6
+WINDOW_EPISODES = 4
+#: Down a row after this many falls in a row, or this many long episodes in a
+#: row with nothing gained in flight. Both read the policy, not one unlucky
+#: episode: at 2048 envs a single fall is noise.
+DEMOTE_FALLS = 2
+DEMOTE_ZEROS = 4
 MIN_EPISODE_STEPS = 200
 
 _COLLISION_GEOMS = r".*_meshcol"
@@ -409,7 +431,8 @@ def env_cfg(
         "stairs": CurriculumTermCfg(
             func=stairs_mdp.curriculum.StairsLevels,
             params={"command_name": "stairs", "promote_steps": PROMOTE_STEPS,
-                    "dwell_episodes": DWELL_EPISODES, "min_steps": MIN_EPISODE_STEPS},
+                    "window": WINDOW_EPISODES, "demote_falls": DEMOTE_FALLS,
+                    "demote_zeros": DEMOTE_ZEROS, "min_steps": MIN_EPISODE_STEPS},
         ),
     }
 

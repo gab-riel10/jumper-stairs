@@ -30,17 +30,17 @@ never passes `min_rise` is a hop: contact chatter reaches 1.3 mm and a push
 that unloads the feet without lifting the body about 9 mm (measured in
 `jumper.ref_free_jump`), and neither is a jump.
 
-Treads crossed by the rear feet **during a flight** are the jump's; `jump_gain`
-holds them for one step at the touchdown, and `rewards.step_up_in_flight` pays
-them. Treads crossed **with a foot on the ground** are a crawl: `crawl_gain`
-holds them for one step and `rewards.crawl` charges them. Both are signed --
-losing a tread costs what gaining one pays -- so shuffling the rear feet back
-and forth over a riser line nets nothing. The treads a hop crossed are
-reclassified as crawl at its touchdown: a flight that did not lift the body is
-walking with a bounce in it.
+A tread counts once, the first time the rear feet stand on it (`k_best`, the
+episode's high-water mark). Reached at the touchdown of a jump, it is the
+jump's: `jump_gain` holds it for one step and `rewards.step_up_in_flight` pays
+it. Reached with a foot on the ground, or at the touchdown of a hop, it is a
+crawl: `crawl_gain` holds it for one step and `rewards.crawl` charges it, and
+it is never paid afterwards. Nothing is refunded and nothing is paid twice:
+walking back down and jumping the same tread again earns nothing, which is
+what closed the loop the first version had (see `_update_command`).
 
-`climbed_net` is the running total -- treads jumped minus treads crawled, per
-episode -- and `rewards.climbed_stream` pays it every step. That stream, not
+`climbed_net` is the running total of treads earned by jumping, per episode,
+monotone, and `rewards.climbed_stream` pays it every step. That stream, not
 the impulse, is what makes a jump worth its risk: a step gained early pays for
 the rest of the episode, as `jumper.ref_free_jump`'s latched apex does, and an
 episode that stands still at HOME earns the upright and settle terms alone.
@@ -120,8 +120,9 @@ class StairsCommand(CommandTerm):
         self.in_flight = zeros(torch.bool)
         #: Peak of `lowest_rise` during the flight in progress.
         self.apex = zeros()
-        #: Treads the rear feet crossed during the flight in progress.
-        self._flight_dk = zeros()
+        #: The highest tread the rear feet have stood on this episode: the
+        #: high-water mark every credit is measured against.
+        self.k_best = zeros(torch.long)
         #: Held for exactly one step after the event, for the rewards.
         self.jump_gain = zeros()
         self.crawl_gain = zeros()
@@ -213,7 +214,7 @@ class StairsCommand(CommandTerm):
         self.k_takeoff[env_ids] = k.long()
         self.in_flight[env_ids] = False
         self.apex[env_ids] = 0.0
-        self._flight_dk[env_ids] = 0.0
+        self.k_best[env_ids] = k.long()
         self.jump_gain[env_ids] = 0.0
         self.crawl_gain[env_ids] = 0.0
         self.touchdown[env_ids] = False
@@ -243,36 +244,42 @@ class StairsCommand(CommandTerm):
 
         airborne = self.airborne()
         k_new = self.stairs.step_index(self.rear_x())
-        dk = (k_new - self.k_rear).float()
 
         takeoff = ~self.in_flight & airborne
         touchdown = self.in_flight & ~airborne
         # Takeoff: remember the tread, start the apex from nothing.
         self.k_takeoff.copy_(torch.where(takeoff, self.k_rear, self.k_takeoff))
         self.apex.masked_fill_(takeoff, 0.0)
-        self._flight_dk.masked_fill_(takeoff, 0.0)
         self.in_flight |= takeoff
 
         rise = self.lowest_rise()
         self.apex.copy_(torch.where(self.in_flight, torch.maximum(self.apex, rise), self.apex))
 
-        # Treads crossed while in the air belong to the flight; the step of the
-        # touchdown too, since the feet come down where the flight put them.
-        flying = self.in_flight
-        self._flight_dk += dk * flying.float()
-        crawl = dk * (~flying).float()
-
+        # Credit is for **new ground only**: treads beyond `k_best`, the highest
+        # tread the rear feet have stood on this episode. The first version paid
+        # every tread crossed in flight and refunded every tread lost on the
+        # ground, and the sighted policy found the loop in it within five
+        # thousand iterations (Kaggle, 2026-10-27, `jumper.stairs_sighted` at
+        # iteration ~5000: `steps_by_flight` 31-40 per episode on an 8-tread
+        # flight, reward 30 -> 300): jump forward over a riser line, walk back
+        # over it, repeat. With a high-water mark there is nothing to walk back
+        # to: a tread is paid once, when first reached, and only by a jump.
+        gain = (k_new - self.k_best).float().clamp(min=0.0)
+        in_air = self.in_flight
         jumped = touchdown & (self.apex > self.cfg.min_rise)
         hopped = touchdown & ~jumped
-        self.jump_gain.copy_(torch.where(jumped, self._flight_dk, torch.zeros_like(dk)))
-        # A hop's treads were walked, with a bounce in it.
-        crawl = crawl + torch.where(hopped, self._flight_dk, torch.zeros_like(dk))
-        self.crawl_gain.copy_(crawl)
+        # Paid at a jump's touchdown; charged on the ground, and at the touchdown
+        # of a hop (a flight that did not lift the body is walking with a bounce
+        # in it). In the air before the touchdown nothing is settled yet.
+        self.jump_gain.copy_(torch.where(jumped, gain, torch.zeros_like(gain)))
+        self.crawl_gain.copy_(torch.where(~in_air | hopped, gain, torch.zeros_like(gain)))
+        settled = jumped | ~in_air | hopped
+        self.k_best.copy_(torch.where(settled, torch.maximum(self.k_best, k_new), self.k_best))
         self.touchdown.copy_(touchdown)
         self.in_flight &= ~touchdown
-        self._flight_dk.masked_fill_(touchdown, 0.0)
 
-        self.climbed_net += self.jump_gain - self.crawl_gain
+        # Treads earned by jumping, this episode: monotone, never refunded.
+        self.climbed_net += self.jump_gain
         self.k_rear.copy_(k_new)
 
         grounded = ~airborne

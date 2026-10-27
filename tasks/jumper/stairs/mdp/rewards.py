@@ -27,21 +27,21 @@ def _cmd(env, command_name: str):
 
 
 def step_up_in_flight(env, command_name: str = "stairs") -> torch.Tensor:
-    """Treads the rear feet crossed during a flight that was a jump, paid once
-    at its touchdown. Signed: a tread lost in the air costs one."""
+    """New treads -- beyond the episode's high-water mark -- the rear feet stood
+    on at the touchdown of a jump, paid once. Never negative, never twice."""
     return _cmd(env, command_name).jump_gain
 
 
 def climbed_stream(env, command_name: str = "stairs") -> torch.Tensor:
-    """Treads jumped minus treads crawled so far this episode, paid every step.
-    Clamped at zero: a net crawl is charged by `crawl`, not twice."""
-    return _cmd(env, command_name).climbed_net.clamp(min=0.0)
+    """Treads earned by jumping so far this episode, paid every step. Monotone:
+    nothing walked back down is refunded, nothing crawled is counted."""
+    return _cmd(env, command_name).climbed_net
 
 
 def crawl(env, command_name: str = "stairs") -> torch.Tensor:
-    """Treads the rear feet crossed with a foot on the ground, this step.
-    Signed, so shuffling across a riser line and back nets nothing. Mount it
-    with a negative weight."""
+    """New treads the rear feet reached with a foot on the ground (or at the
+    touchdown of a hop), this step. Charged once and never paid afterwards.
+    Mount it with a negative weight."""
     return _cmd(env, command_name).crawl_gain
 
 
