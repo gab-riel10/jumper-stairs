@@ -155,8 +155,11 @@ REACHED_TOP_WEIGHT = 20.0
 FLIGHT_HEIGHT_WEIGHT = 1.0
 FLIGHT_HEIGHT_SCALE = 0.10
 #: Forward speed in flight, per 1 m/s. A vertical jump gains no tread; this is
-#: the gradient from the warm-started vertical jump towards a bound.
-FLIGHT_FORWARD_WEIGHT = 0.5
+#: the gradient from the warm-started vertical jump towards a bound. Raised
+#: from 0.5 after the first 10 h on Kaggle (2026-10-27, blind task, 2048
+#: envs): 6.8 jumps an episode with the lowest point 17.8 cm up, for 1.5
+#: treads -- it jumped on the spot. The push is there; forward is what to pay.
+FLIGHT_FORWARD_WEIGHT = 2.0
 #: Lowered from 1.0 with `SETTLE_WEIGHT` and `TIME_COST_WEIGHT` after the first
 #: 10 h on Kaggle (2026-10-27): standing at HOME paid about 10 an episode
 #: (8 s x (1.0 + 0.3 - 0.05)) against about 14 for the 1.2 treads the policy
