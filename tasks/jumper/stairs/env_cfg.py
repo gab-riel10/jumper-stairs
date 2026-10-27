@@ -48,6 +48,7 @@ against, so that the next person changes the number and not the reason.
 from __future__ import annotations
 
 import copy
+import dataclasses
 import math
 from pathlib import Path
 
@@ -73,6 +74,7 @@ from ..common.constants import (
     IMU_GRAVITY_NOISE,
     JUMPER_FOOT_FRICTION_RANGE,
     PUSH_VELOCITY_RANGE,
+    TIP_LINKS,
     get_jumper_robot_cfg,
 )
 from ..common.mdp.observations import actuator_force
@@ -205,6 +207,21 @@ MIN_EPISODE_STEPS = 200
 
 _COLLISION_GEOMS = r".*_meshcol"
 
+# ── The jaws, in `jumper.stairs_free` ────────────────────────────────────────
+#: The collision geoms of the two front jaws: palm, finger, finger tip, front
+#: pad and the two grip inserts (`TIP_LINKS`' front-leg half; the rear pad is
+#: the foot already). In every other stairs task they are body on the terrain,
+#: charged by `illegal_contact` and frictionless (condim 1, `constants.py`'s
+#: scheme). The free task lets the robot hook or lean on a riser's edge with
+#: them: they leave the illegal set and get a tangential contact at
+#: `HAND_FRICTION`. The jaw joints stay uncontrolled, held at HOME, as in
+#: every FOOT-mode task: the hook is a shape, not a grip.
+HAND_GEOMS: tuple[str, ...] = tuple(f"{link}_meshcol" for link in TIP_LINKS if link[:2] in ("LF", "RF"))
+#: Hard plastic on wood or stone, against the silicone foot's 1.2. A handbook
+#: figure like the foot's, and the one thing `jumper.stairs_free` assumes that
+#: its siblings do not.
+HAND_FRICTION = (0.6, 0.01, 0.01)
+
 
 def _stride_history(cfg: ManagerBasedRlEnvCfg) -> None:
     """`jumper.ref_free_jump`'s: five frames four steps apart on the per-joint
@@ -263,7 +280,8 @@ def env_cfg(
         stairs_row: `--stairs-row`, a curriculum row to pin every flight to; empty
             is the ladder. The curriculum then has nowhere to move anyone.
         free_climb: `jumper.stairs_free`: a crawled tread pays what a jumped one
-            does, enters the stream and counts for the curriculum. How the robot
+            does, enters the stream and counts for the curriculum, and the jaws
+            may touch the terrain with friction (`HAND_GEOMS`). How the robot
             gets up is its own business; only the body on the terrain still costs.
     """
     cfg = make_velocity_env_cfg()
@@ -292,6 +310,25 @@ def env_cfg(
     robot = get_jumper_robot_cfg(effort_limit=EFFORT_LIMIT, asset=asset)
     for actuator in robot.articulation.actuators:
         actuator.stiffness = _KP
+    legal_geoms = FOOT_GEOMS
+    if free_climb:
+        legal_geoms = FOOT_GEOMS + HAND_GEOMS
+        hand_re = "|".join(f"^{n}$" for n in HAND_GEOMS)
+        collision = robot.collisions[0]
+        # `resolve_expr` takes the first matching pattern, so the jaws go in
+        # front of the ".*" catch-all that makes everything else condim 1.
+        def _with_hands(field, value):
+            table = dict(field)
+            last = table.pop(".*")
+            table[hand_re] = value
+            table[".*"] = last
+            return table
+        robot.collisions = (dataclasses.replace(
+            collision,
+            condim=_with_hands(collision.condim, 3),
+            priority=_with_hands(collision.priority, 1),
+            friction={**collision.friction, hand_re: HAND_FRICTION},
+        ),)
     cfg.scene.entities = {"robot": robot}
 
     # The ground scan, kept: critic-only unless `sighted`. The foot scan is
@@ -330,7 +367,7 @@ def env_cfg(
         ContactSensorCfg(
             name="body_ground_contact",
             primary=ContactMatch(mode="geom", pattern=_COLLISION_GEOMS, entity="robot",
-                                 exclude=FOOT_GEOMS),
+                                 exclude=legal_geoms),
             secondary=ContactMatch(mode="body", pattern="terrain"),
             fields=("force",),
             reduce="netforce",
