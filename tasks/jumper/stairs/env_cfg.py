@@ -182,17 +182,25 @@ ILLEGAL_CONTACT_WEIGHT = -5.0
 LEG_COLLISION_WEIGHT = -5.0
 #: `jumper.ref_free_jump`'s, per squared radian of target moved in one step.
 ACTION_RATE_PER_RAD_SQ = -0.2304
-#: Squared joint acceleration and velocity, summed over the 20 gait joints,
-#: per step. `action_rate_l2` charges the raw targets; these charge what the
-#: joints actually did, which is what wears a servo and what the 20 s replay of
-#: the first Kaggle session showed after the landing (2026-10-27, blind task
-#: after 10 h): the robot standing and trembling. Measured with the warm-start
-#: policy on this task (native:cpu, 1 env, play mode): standing quietly
-#: `joint_acc_l2` 8.5e4 and `joint_vel_l2` 2.9 a step; in the push and the air
-#: 5e6 and 2.5e3 for 0.45 s. At these weights a quiet stand costs 0.02 and
-#: 0.0006 a second, a jump 0.6 and 0.1 against the 8 a tread pays, and a
-#: tremble ten times the quiet level 0.2 a second -- more than standing earns.
-JOINT_ACC_WEIGHT = -2.5e-7
+#: Squared joint velocity, summed over the 20 gait joints, per step: the price
+#: of what the servos actually did, next to `action_rate_l2`'s on the targets.
+#: Measured with the warm-start policy on this task (native:cpu, 1 env, play
+#: mode): standing quietly 2.9 a step with the mean action, 122 with the
+#: exploration noise on (std 0.3); in the push and the air 2.5e3 for 0.45 s.
+#: At this weight a jump costs 0.1 against the 8 a tread pays and the noise
+#: 0.1 an episode.
+#:
+#: **No `joint_acc_l2`.** It was tried at -2.5e-7 on Kaggle (2026-10-27,
+#: `jumper.stairs_sighted` and `jumper.stairs_free`, 2048 envs, 1.1 h): the
+#: reward started at -14 and climbed to 0 while `steps_by_flight` stayed at
+#: exactly 0 for 640 iterations, where the first session had 0.44 by
+#: iteration 354. The same probe explains it: with the exploration noise on,
+#: a quiet stand reads 3.7e6 a step, 43 times the mean action's 8.5e4, so
+#: the term charged the noise 0.9 a second -- more than anything else paid --
+#: and the only way to stop paying was to stop exploring. The tremble the
+#: term was for is of the noise's own size, so no weight catches one without
+#: the other; `action_rate_l2` at `jumper.ref_free_jump`'s calibration is
+#: what this robot's jump was trained against, and stays.
 JOINT_VEL_WEIGHT = -1.0e-4
 
 # ── Terminations ─────────────────────────────────────────────────────────────
@@ -487,8 +495,6 @@ def env_cfg(
                                        params={"sensor_name": "self_collision", "force_threshold": 1.0}),
         "dof_pos_limits": RewardTermCfg(func=mdp.joint_pos_limits, weight=-1.0),
         "action_rate_l2": RewardTermCfg(func=mdp.action_rate_l2, weight=ACTION_RATE_PER_RAD_SQ * ACTION_SCALE**2),
-        "joint_acc_l2": RewardTermCfg(func=envs_mdp.joint_acc_l2, weight=JOINT_ACC_WEIGHT,
-                                      params={"asset_cfg": gait_cfg}),
         "joint_vel_l2": RewardTermCfg(func=envs_mdp.joint_vel_l2, weight=JOINT_VEL_WEIGHT,
                                       params={"asset_cfg": gait_cfg}),
     }
