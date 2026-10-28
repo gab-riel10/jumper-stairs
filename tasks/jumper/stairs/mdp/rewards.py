@@ -41,6 +41,22 @@ def flight_progress(env, command_name: str = "stairs") -> torch.Tensor:
     return _cmd(env, command_name).progress_gain
 
 
+def landing_centre(env, command_name: str = "stairs") -> torch.Tensor:
+    """At the touchdown of a jump that gained a tread, exp(-(dx/sigma)^2), dx
+    the base's distance from the tread's centre; paid once. A robot nearly as
+    long as the tread fits on it only near the middle, and lands from there
+    into the next crouch."""
+    return _cmd(env, command_name).landing_score
+
+
+def feet_near_edge(env, command_name: str = "stairs") -> torch.Tensor:
+    """Grounded feet within a few centimetres of a riser line -- a tread's nose
+    or the foot of the next riser -- every step. Mount negative: the edge term
+    of Extreme Parkour (Cheng et al. 2023, arXiv 2309.14341), along x only
+    because every edge here runs across the flight."""
+    return _cmd(env, command_name).edge_feet
+
+
 def climbed_stream(env, command_name: str = "stairs") -> torch.Tensor:
     """Treads earned by jumping so far this episode, paid every step. Monotone:
     nothing walked back down is refunded, nothing crawled is counted."""
@@ -161,6 +177,8 @@ __all__ = [
     "lateral_drift",
     "leg_collision",
     "reached_top",
+    "landing_centre",
+    "feet_near_edge",
     "settle_pose",
     "step_up_in_flight",
     "time_cost",

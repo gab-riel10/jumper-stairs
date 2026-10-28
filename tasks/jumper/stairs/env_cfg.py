@@ -158,6 +158,29 @@ STEP_UP_WEIGHT = 8.0
 #: credit needs 0.2 m of drift before it says anything, and 20 joints of noise
 #: do not find 0.2 m. This pays the first centimetre.
 PROGRESS_PER_M = 20.0
+#: ...and only up to the centre of the tread landed on: a guard, so that no
+#: metre past the centre ever pays. It does not bind for C as it is, whose
+#: first contact is ahead of the centre (see `LANDING_CENTRE_WEIGHT`).
+PROGRESS_TO_CENTRE = True
+#: Once a jump that gained a tread has been followed by 0.2 s on the ground,
+#: exp(-(dx / sigma)^2), dx the feet's mean x against the tread's centre: half
+#: a tread's credit for a centred stance, a third of it 5 cm off. The robot's
+#: stance (0.331 m) leaves 3.5 cm either side on a 0.40 m tread. C (Kaggle,
+#: 2026-10-27, `model_6750`; replayed on the 15 cm flight, alpha 0.5, native
+#: CPU, 8 envs) touches down 2-13 cm past the nose, slides on, and stands
+#: 3-5 cm beyond the centre with its front feet at the next riser -- a foot on
+#: an edge for 2-5 s of every 4 -- and makes one jump an episode.
+LANDING_CENTRE_WEIGHT = 4.0
+LANDING_SIGMA = 0.05
+#: Per grounded foot within `EDGE_MARGIN` of a riser line, per second: Extreme
+#: Parkour's edge term (arXiv 2309.14341). Two feet on an edge cancel what
+#: `climbed_stream` pays for the tread, so standing there earns nothing, while
+#: the jump that got there still pays its 8; a takeoff from the foot of a riser
+#: costs about 0.15. C stands with a foot on an edge 0.1-4.6 s of every 4 s,
+#: the most of it where its feet settle 5 cm past the centre (same probe as
+#: `LANDING_CENTRE_WEIGHT`).
+EDGE_WEIGHT = -0.5
+EDGE_MARGIN = 0.025
 #: Per tread of net climb, every step for the rest of the episode. This is the
 #: term that makes a jump worth its risk: one tread gained with 6 s to go pays
 #: 1200 steps of 1.0, against the 1.0 a step `upright` pays for standing still.
@@ -209,7 +232,15 @@ LEG_COLLISION_WEIGHT = -5.0
 ACTION_RATE_PER_RAD_SQ = -0.2304
 #: The low-pass on the joint targets (`mdp/actions.py`), the weight of the new
 #: request per control step; 1 is no filter. Overridden by `--action-ema`.
-ACTION_EMA_ALPHA = 1.0
+#: 0.5 (a 32 Hz corner at 200 Hz) since C's measurements (Kaggle CPU,
+#: 2026-10-28, `model_6750`, 15 cm row, 16 envs, noise on): replayed through
+#: it C still climbs 94 % and falls 0 % (6 % unfiltered), and the target moves
+#: 11 mrad a step instead of 28; 0.3 already breaks the jump (38 % up, 44 %
+#: falls) and 0.2 stops it. The post-landing tremble (0.56 rad/s RMS against
+#: 0.1 standing) is the policy's own, with or without observation noise, and
+#: the filter in replay does not touch it: trained through the filter, the
+#: policy learns the lag the robot's controller will apply.
+ACTION_EMA_ALPHA = 0.5
 #: Squared joint velocity, summed over the 20 gait joints, per step: the price
 #: of what the servos actually did, next to `action_rate_l2`'s on the targets.
 #: Measured with the warm-start policy on this task (native:cpu, 1 env, play
@@ -236,8 +267,9 @@ FELL_OVER_RAD = math.radians(50.0)
 OFF_SIDE_M = 0.7
 SETTLE_STEPS = 20
 
-#: Eight seconds: eight treads at one bound a second, with the landing to spare.
-EPISODE_S = 8.0
+#: Sixteen seconds since C (2026-10-27) made one jump an episode in eight: room
+#: to land, reposition and go again. Eight treads at one bound every two seconds.
+EPISODE_S = 16.0
 
 # ── Curriculum ───────────────────────────────────────────────────────────────
 #: Treads gained in flight over the last `WINDOW_EPISODES` episodes at the
@@ -507,6 +539,9 @@ def env_cfg(
             stairs=stairs,
             settle_steps=SETTLE_STEPS,
             free_climb=free_climb,
+            progress_to_centre=PROGRESS_TO_CENTRE,
+            landing_sigma=LANDING_SIGMA,
+            edge_margin=EDGE_MARGIN,
         )
     }
 
@@ -517,6 +552,10 @@ def env_cfg(
                                            params={"command_name": "stairs"}),
         "flight_progress": RewardTermCfg(func=R.flight_progress, weight=PROGRESS_PER_M,
                                          params={"command_name": "stairs"}),
+        "landing_centre": RewardTermCfg(func=R.landing_centre, weight=LANDING_CENTRE_WEIGHT,
+                                        params={"command_name": "stairs"}),
+        "feet_near_edge": RewardTermCfg(func=R.feet_near_edge, weight=EDGE_WEIGHT,
+                                        params={"command_name": "stairs"}),
         "climbed_stream": RewardTermCfg(func=R.climbed_stream, weight=CLIMBED_STREAM_WEIGHT,
                                         params={"command_name": "stairs"}),
         "crawl": RewardTermCfg(func=R.crawl, weight=STEP_UP_WEIGHT if free_climb else CRAWL_WEIGHT,

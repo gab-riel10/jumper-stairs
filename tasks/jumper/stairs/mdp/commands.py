@@ -114,6 +114,24 @@ class StairsCommandCfg(CommandTermCfg):
     there a tread is a tread however the base got over it, and the task's
     `crawl` term pays it instead of charging it. The metrics stay as they are,
     so `crawl_ratio` still says how the climbing was done."""
+    progress_to_centre: bool = False
+    """Pay `progress_gain` only up to the centre of the tread landed on, so that
+    no metre past the centre ever pays."""
+    landing_sigma: float = 0.05
+    """Width (m) of `landing_score`'s bell around the centre of a new tread. The
+    robot's stance is 0.331 m on a 0.40 m tread: 3.5 cm either side at the
+    centre, nothing at 7 cm off it."""
+    landing_settle_steps: int = 40
+    """Grounded steps after a jump's touchdown before the landing is scored:
+    the first contact is the front feet, with the body still moving."""
+    edge_margin: float = 0.025
+    """A grounded foot closer than this (m, along the flight) to a riser line is
+    on an edge (`edge_feet`). Below the 3.5 cm a centred stance leaves, so a
+    robot standing in the middle of a tread is not charged."""
+    foot_touch_height: float = 0.012
+    """A foot site less than this above its own HOME height over the tread
+    beneath it is on the ground, for `edge_feet` -- read off the geometry
+    rather than the contact sensor, whose slot order is the model's."""
 
     def __post_init__(self):
         self.class_type = StairsCommand
@@ -157,6 +175,15 @@ class StairsCommand(CommandTerm):
         self.progress_gain = zeros()
         self.x_best = zeros()
         self.touchdown = zeros(torch.bool)
+        #: Once a jump that gained a tread has been followed by
+        #: `landing_settle_steps` on the ground: exp(-(dx/sigma)^2), dx the
+        #: distance of the feet's mean x from that tread's centre; one step.
+        self.landing_score = zeros()
+        self._landing_pending = zeros(torch.bool)
+        #: Grounded feet within `edge_margin` of a riser line, now.
+        self.edge_feet = zeros()
+        self._landing_dx_sum = zeros()
+        self._landings = zeros()
         #: Running total: jumped minus crawled, this episode.
         self.climbed_net = zeros()
         self.top_steps = zeros()
@@ -181,6 +208,8 @@ class StairsCommand(CommandTerm):
         self.metrics["reached_top"] = zeros()
         self.metrics["crawl_ratio"] = zeros()
         self.metrics["riser"] = zeros()
+        self.metrics["landing_dx_m"] = zeros()
+        self.metrics["edge_s"] = zeros()
 
     # ── What the rest of the task reads ────────────────────────────────────
     @property
@@ -207,6 +236,34 @@ class StairsCommand(CommandTerm):
         data = self.robot.data
         x = data.data.site_xpos[:, data.indexing.site_ids][:, self._rear_sites, 0]
         return x.min(dim=1).values - self._env.scene.env_origins[:, 0]
+
+    def tread_centre_x(self, k: torch.Tensor) -> torch.Tensor:
+        """x of tread `k`'s centre, from the spawn origin (`k = 0`: the last
+        tread-length of the landing; the top platform: the last tread's)."""
+        k = k.clamp(max=self.stairs.num_steps).float()
+        return self.stairs.first_riser_from_origin + (k - 0.5) * self.stairs.tread
+
+    def feet_x(self) -> torch.Tensor:
+        """x of the six foot sites, from the spawn origin, (N, 6)."""
+        data = self.robot.data
+        sites = data.data.site_xpos[:, data.indexing.site_ids][:, self._foot_sites]
+        return sites[..., 0] - self._env.scene.env_origins[:, 0:1]
+
+    def feet_on_edges(self) -> torch.Tensor:
+        """Grounded feet within `edge_margin` of a riser line, per robot."""
+        data = self.robot.data
+        sites = data.data.site_xpos[:, data.indexing.site_ids][:, self._foot_sites]
+        x = sites[..., 0] - self._env.scene.env_origins[:, 0:1]
+        stairs = self.stairs
+        j = torch.round((x - stairs.first_riser_from_origin) / stairs.tread).clamp(0, stairs.num_steps - 1)
+        near = (x - (stairs.first_riser_from_origin + j * stairs.tread)).abs() < self.cfg.edge_margin
+        k = stairs.step_index(x)
+        rise = sites[..., 2] - self.tread_z_per_foot(k) - self._home_z[:-1]
+        return (near & (rise < self.cfg.foot_touch_height)).float().sum(dim=1)
+
+    def tread_z_per_foot(self, k: torch.Tensor) -> torch.Tensor:
+        """World height of tread `k`'s top face, `k` per robot and foot."""
+        return self._env.scene.env_origins[:, 2:3] + k.float() * self.riser.unsqueeze(1)
 
     def tread_z(self, k: torch.Tensor) -> torch.Tensor:
         """World height of tread `k`'s top face."""
@@ -258,6 +315,11 @@ class StairsCommand(CommandTerm):
         # first update sets the mark to wherever the base is.
         self.x_best[env_ids] = -1.0e9
         self.touchdown[env_ids] = False
+        self.landing_score[env_ids] = 0.0
+        self._landing_pending[env_ids] = False
+        self.edge_feet[env_ids] = 0.0
+        self._landing_dx_sum[env_ids] = 0.0
+        self._landings[env_ids] = 0.0
         self.climbed_net[env_ids] = 0.0
         self.top_steps[env_ids] = 0.0
         self.grounded_steps[env_ids] = 0.0
@@ -282,6 +344,7 @@ class StairsCommand(CommandTerm):
         self.crawl_gain.zero_()
         self.progress_gain.zero_()
         self.touchdown.zero_()
+        self.landing_score.zero_()
 
         airborne = self.airborne()
         x_base = self.base_x()
@@ -323,9 +386,28 @@ class StairsCommand(CommandTerm):
 
         # Metres landed on beyond the high-water mark, paid at a jump's touchdown;
         # on the ground the mark follows the base for free.
-        ahead = (x_base - self.x_best).clamp(min=0.0)
+        x_paid = torch.minimum(x_base, self.tread_centre_x(k_new)) if self.cfg.progress_to_centre else x_base
+        ahead = (x_paid - self.x_best).clamp(min=0.0)
         self.progress_gain.copy_(torch.where(jumped, ahead, torch.zeros_like(ahead)))
         self.x_best.copy_(torch.where(settled, torch.maximum(self.x_best, x_base), self.x_best))
+
+        # Where a jump that gained a tread left the robot once it settled: the
+        # feet's mean x against the tread's centre. Measured on C (model_6750,
+        # 15 cm flight, alpha 0.5, native CPU, 8 envs, 2026-10-28): at the first
+        # contact the base is 2-13 cm past the nose, ahead of the centre; it
+        # then slides on and stands 3-5 cm beyond the centre, front feet at the
+        # next riser, a foot on an edge for 2-5 s of every 4.
+        self._landing_pending |= jumped & (gain > 0)
+        grounded_now = ~airborne
+        settled_now = self._landing_pending & grounded_now & (self.grounded_steps + 1.0 >= self.cfg.landing_settle_steps)
+        dx = self.feet_x().mean(dim=1) - self.tread_centre_x(k_new)
+        on_top_platform = (k_new >= self.stairs.num_steps) & (dx > 0)
+        score = torch.where(on_top_platform, torch.ones_like(dx), torch.exp(-(dx / self.cfg.landing_sigma) ** 2))
+        self.landing_score.copy_(torch.where(settled_now, score, torch.zeros_like(score)))
+        self._landing_dx_sum += torch.where(settled_now & ~on_top_platform, dx.abs(), torch.zeros_like(dx))
+        self._landings += (settled_now & ~on_top_platform).float()
+        self._landing_pending &= ~settled_now
+        self.edge_feet.copy_(self.feet_on_edges())
 
         # Treads earned by jumping, this episode: monotone, never refunded.
         self.climbed_net += self.jump_gain
@@ -346,6 +428,8 @@ class StairsCommand(CommandTerm):
         m["jumps"] += jumped.float()
         m["apex_rise"].copy_(torch.where(jumped, torch.maximum(m["apex_rise"], self.apex), m["apex_rise"]))
         m["flight_s"] += airborne.float() * dt
+        m["edge_s"] += (self.edge_feet > 0).float() * dt
+        m["landing_dx_m"].copy_(self._landing_dx_sum / self._landings.clamp(min=1.0))
 
     # ── Geometry at HOME ───────────────────────────────────────────────────
     def _heights_at_home(self) -> torch.Tensor:
