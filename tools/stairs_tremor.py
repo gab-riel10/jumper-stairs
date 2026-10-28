@@ -48,7 +48,7 @@ def _match_training_noise(env_cfg, train_cfg) -> None:
 
 
 def run_one(task: str, checkpoint: Path, row: str, alpha: float, noise: bool, num_envs: int,
-            seconds: float, settle_s: float, hf_hz: float) -> dict:
+            seconds: float, settle_s: float, hf_hz: float, layout: str = "") -> dict:
     import torch
 
     import tasks
@@ -56,7 +56,7 @@ def run_one(task: str, checkpoint: Path, row: str, alpha: float, noise: bool, nu
     from mjlab.rl import RslRlVecEnvWrapper
     from mjlab.rl.runner import MjlabOnPolicyRunner
 
-    task_args = {"stairs_row": row, "action_ema": str(alpha)}
+    task_args = {"stairs_row": row, "action_ema": str(alpha), "stairs_layout": layout}
     cfg = tasks.load_env_cfg(task, play=True, task_args=task_args)
     if noise:
         _match_training_noise(cfg, tasks.load_env_cfg(task, task_args=task_args))
@@ -151,6 +151,8 @@ def main() -> None:
     p.add_argument("--task", default="jumper.stairs_free")
     p.add_argument("--checkpoint", type=Path, required=True)
     p.add_argument("--row", default="9")
+    p.add_argument("--layout", default="", choices=("", "flight", "curb"),
+                   help="flight (empty, eight treads) or curb (one riser, 1.5 m of top)")
     p.add_argument("--alphas", default="1,0.5,0.3,0.2,0.1")
     p.add_argument("--noise", default="on,off", help="on, off, or on,off")
     p.add_argument("--num-envs", type=int, default=16)
@@ -170,7 +172,7 @@ def main() -> None:
     for noise in [s.strip() == "on" for s in a.noise.split(",")]:
         for alpha in [float(x) for x in a.alphas.split(",")]:
             r = run_one(a.task, a.checkpoint, a.row, alpha, noise, a.num_envs, a.seconds,
-                        a.settle_s, a.hf_hz)
+                        a.settle_s, a.hf_hz, a.layout)
             rows.append(r)
             print(f"noise {'on ' if noise else 'off'} alpha {alpha:<4g} | climbed {r['climbed']:.2f}"
                   f" fell {r['fell']:.2f} apex {r['apex_cm']:5.1f} cm land {r['t_land_s']:.2f} s"

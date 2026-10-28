@@ -108,6 +108,15 @@ HISTORY_TERMS = frozenset({"joint_pos", "joint_vel", "actions", "actuator_force"
 STAIRS = Staircase(num_steps=8, tread=0.40, riser_range=(0.02, 0.15), landing=1.0, top=0.8, tail=0.4, width=2.0)
 NUM_ROWS = 10
 
+#: `--stairs-layout curb`, for replay and video only: one riser, then 1.5 m of
+#: flat top (the first tread's 0.40 m and 1.10 m more) -- a kerb with a pavement
+#: behind it. Same riser rows as the flight, so `--stairs-row 9` is the 15 cm
+#: kerb. The scan sees no second riser ahead, which the flight always shows it;
+#: whether the policy jumps the same with nothing beyond is what the layout is
+#: for. Never trained on.
+CURB = Staircase(num_steps=1, tread=0.40, riser_range=(0.02, 0.15), landing=1.0, top=1.10, tail=0.4, width=2.0)
+LAYOUTS = {"flight": STAIRS, "curb": CURB}
+
 #: Every robot starts on the flattest row (`max_init_terrain_level`), for the
 #: reason `common/velocity_env.py` measured: a policy put on ground it cannot
 #: handle unwinds both curricula at once.
@@ -291,7 +300,7 @@ def _stride_history(cfg: ManagerBasedRlEnvCfg) -> None:
             term.noise = None
 
 
-def _pin_row(generator, row: str):
+def _pin_row(generator, row: str, stairs: Staircase = STAIRS):
     """Narrow the ladder to one row, `scenes/rough.py::_pin`'s way: the same
     generator with `num_rows=1` and `difficulty_range` collapsed onto the row's
     difficulty, so the flight is byte-for-byte the one the full grid builds."""
@@ -304,13 +313,13 @@ def _pin_row(generator, row: str):
     if not 0 <= index < NUM_ROWS:
         raise SystemExit(f"[stairs] --stairs-row {index} is outside 0..{NUM_ROWS - 1}")
     difficulty = index / (NUM_ROWS - 1)
-    print(f"[stairs] pinned to row {index}: riser {STAIRS.riser(difficulty):.3f} m, tread {STAIRS.tread} m")
+    print(f"[stairs] pinned to row {index}: riser {stairs.riser(difficulty):.3f} m, tread {stairs.tread} m")
     return replace(generator, num_rows=1, difficulty_range=(difficulty, difficulty))
 
 
 def env_cfg(
     asset: Path | None = None, play: bool = False, sighted: bool = False, stairs_row: str = "",
-    free_climb: bool = False, action_ema: str = "",
+    free_climb: bool = False, action_ema: str = "", stairs_layout: str = "",
 ) -> ManagerBasedRlEnvCfg:
     """Stairs by jumping.
 
@@ -323,11 +332,18 @@ def env_cfg(
             is the ladder. The curriculum then has nowhere to move anyone.
         action_ema: `--action-ema`, the low-pass's alpha on the joint targets
             (`mdp/actions.py`); empty is `ACTION_EMA_ALPHA`.
+        stairs_layout: `--stairs-layout`, `flight` (empty, what training uses) or
+            `curb` (`CURB`: one riser and a long top; replay only, and the episode
+            no longer ends on arrival, so the landing can be watched).
         free_climb: `jumper.stairs_free`: a crawled tread pays what a jumped one
             does, enters the stream and counts for the curriculum, and the jaws
             may touch the terrain with friction (`HAND_GEOMS`). How the robot
             gets up is its own business; only the body on the terrain still costs.
     """
+    layout = stairs_layout or "flight"
+    if layout not in LAYOUTS:
+        raise SystemExit(f"[stairs] --stairs-layout {layout!r}: one of {', '.join(LAYOUTS)}")
+    stairs = LAYOUTS[layout]
     cfg = make_velocity_env_cfg()
 
     # ── Sim ───────────────────────────────────────────────────────────────────
@@ -346,9 +362,9 @@ def env_cfg(
     # ── Scene: the staircase, and the robot at kp=20 ──────────────────────────
     assert cfg.scene.terrain is not None
     cfg.scene.terrain.terrain_type = "generator"
-    generator = stairs_mdp.terrain.terrain_cfg(STAIRS, NUM_ROWS)
+    generator = stairs_mdp.terrain.terrain_cfg(stairs, NUM_ROWS)
     if stairs_row:
-        generator = _pin_row(generator, stairs_row)
+        generator = _pin_row(generator, stairs_row, stairs)
     cfg.scene.terrain.terrain_generator = generator
     cfg.scene.terrain.max_init_terrain_level = MAX_INIT_LEVEL
     robot = get_jumper_robot_cfg(effort_limit=EFFORT_LIMIT, asset=asset)
@@ -488,7 +504,7 @@ def env_cfg(
     cfg.commands = {
         "stairs": stairs_mdp.commands.StairsCommandCfg(
             entity_name="robot",
-            stairs=STAIRS,
+            stairs=stairs,
             settle_steps=SETTLE_STEPS,
             free_climb=free_climb,
         )
@@ -561,7 +577,7 @@ def env_cfg(
         "reset_to_default": EventTermCfg(func=envs_mdp.reset_scene_to_default, mode="reset"),
         "reset_on_tread": EventTermCfg(
             func=stairs_mdp.events.reset_on_tread, mode="reset",
-            params={"stairs": STAIRS, "elevated_fraction": ELEVATED_FRACTION,
+            params={"stairs": stairs, "elevated_fraction": ELEVATED_FRACTION,
                     "max_start_step": MAX_START_STEP},
         ),
         **cfg.events,
@@ -580,6 +596,11 @@ def env_cfg(
         # Keep the ladder: `--terrain-row` has no meaning here, so a replay
         # shows every row. The curriculum still moves robots on the evidence.
         cfg.scene.sensors = (cfg.scene.sensors or ()) + (tof_sensor(),)
+
+    if layout == "curb":
+        # One riser: the top is reached by the first landing, and `reached_top`
+        # would end the episode 0.1 s later.
+        cfg.terminations.pop("reached_top", None)
 
     _stride_history(cfg)
     return cfg

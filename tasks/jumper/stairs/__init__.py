@@ -26,6 +26,7 @@ register(
 #: `.env` like every other default in this repository.
 STAIRS_ROW_ENV = "MJRL_STAIRS_ROW"
 ACTION_EMA_ENV = "MJRL_STAIRS_ACTION_EMA"
+STAIRS_LAYOUT_ENV = "MJRL_STAIRS_LAYOUT"
 
 
 def cli_args(group):
@@ -51,4 +52,10 @@ def cli_args(group):
         "previous target, per control step. Empty is the task's own setting "
         "(ACTION_EMA_ALPHA in env_cfg.py); 1 is no filter",
     )
-    return ("stairs_row", "action_ema")
+    group.add_argument(
+        "--stairs-layout", dest="stairs_layout", default=os.environ.get(STAIRS_LAYOUT_ENV, ""),
+        choices=("", "flight", "curb"), metavar="LAYOUT",
+        help="flight (the default, what training uses: eight treads) or curb "
+        "(one riser and 1.5 m of flat top; replay and video only)",
+    )
+    return ("stairs_row", "action_ema", "stairs_layout")
