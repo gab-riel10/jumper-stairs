@@ -25,6 +25,7 @@ register(
 #: The environment key behind `--stairs-row`, so a pinned row can be set from
 #: `.env` like every other default in this repository.
 STAIRS_ROW_ENV = "MJRL_STAIRS_ROW"
+ACTION_EMA_ENV = "MJRL_STAIRS_ACTION_EMA"
 
 
 def cli_args(group):
@@ -43,4 +44,11 @@ def cli_args(group):
         help="pin every flight to one riser-height row, 0 (2 cm) to 9 (15 cm). "
         "Empty is the full ladder, which training uses",
     )
-    return ("stairs_row",)
+    group.add_argument(
+        "--action-ema", dest="action_ema", default=os.environ.get(ACTION_EMA_ENV, ""),
+        metavar="ALPHA",
+        help="low-pass the joint targets: target = ALPHA * asked + (1 - ALPHA) * "
+        "previous target, per control step. Empty is the task's own setting "
+        "(ACTION_EMA_ALPHA in env_cfg.py); 1 is no filter",
+    )
+    return ("stairs_row", "action_ema")

@@ -198,6 +198,9 @@ ILLEGAL_CONTACT_WEIGHT = -5.0
 LEG_COLLISION_WEIGHT = -5.0
 #: `jumper.ref_free_jump`'s, per squared radian of target moved in one step.
 ACTION_RATE_PER_RAD_SQ = -0.2304
+#: The low-pass on the joint targets (`mdp/actions.py`), the weight of the new
+#: request per control step; 1 is no filter. Overridden by `--action-ema`.
+ACTION_EMA_ALPHA = 1.0
 #: Squared joint velocity, summed over the 20 gait joints, per step: the price
 #: of what the servos actually did, next to `action_rate_l2`'s on the targets.
 #: Measured with the warm-start policy on this task (native:cpu, 1 env, play
@@ -307,7 +310,7 @@ def _pin_row(generator, row: str):
 
 def env_cfg(
     asset: Path | None = None, play: bool = False, sighted: bool = False, stairs_row: str = "",
-    free_climb: bool = False,
+    free_climb: bool = False, action_ema: str = "",
 ) -> ManagerBasedRlEnvCfg:
     """Stairs by jumping.
 
@@ -318,6 +321,8 @@ def env_cfg(
             this; `jumper.stairs` never does, because the export would refuse it.
         stairs_row: `--stairs-row`, a curriculum row to pin every flight to; empty
             is the ladder. The curriculum then has nowhere to move anyone.
+        action_ema: `--action-ema`, the low-pass's alpha on the joint targets
+            (`mdp/actions.py`); empty is `ACTION_EMA_ALPHA`.
         free_climb: `jumper.stairs_free`: a crawled tread pays what a jumped one
             does, enters the stream and counts for the curriculum, and the jaws
             may touch the terrain with friction (`HAND_GEOMS`). How the robot
@@ -466,8 +471,15 @@ def env_cfg(
         params={"command_name": "stairs", "rise_scale": FLIGHT_HEIGHT_SCALE, "mirror_kind": "scalar"},
     )
 
-    # ── Action: absolute targets around HOME ──────────────────────────────────
-    joint_pos_action = cfg.actions["joint_pos"]
+    # ── Action: absolute targets around HOME, optionally low-passed ───────────
+    alpha = float(action_ema) if str(action_ema).strip() else ACTION_EMA_ALPHA
+    base_action = cfg.actions["joint_pos"]
+    joint_pos_action = stairs_mdp.actions.SmoothedJointPositionActionCfg(
+        **{f.name: getattr(base_action, f.name) for f in dataclasses.fields(base_action)
+           if f.init and f.name != "class_type"},
+        alpha=alpha,
+    )
+    cfg.actions["joint_pos"] = joint_pos_action
     joint_pos_action.actuator_names = list(GAIT_JOINTS)
     joint_pos_action.scale = {j: ACTION_SCALE for j in GAIT_JOINTS}
     joint_pos_action.use_default_offset = True

@@ -9,8 +9,9 @@ from mjlab.envs import ManagerBasedRlEnvCfg
 from ..stairs.env_cfg import env_cfg as stairs_env_cfg
 
 
-def env_cfg(asset: Path | None = None, play: bool = False, stairs_row: str = "") -> ManagerBasedRlEnvCfg:
-    return stairs_env_cfg(asset=asset, play=play, sighted=True, stairs_row=stairs_row, free_climb=True)
+def env_cfg(asset: Path | None = None, play: bool = False, stairs_row: str = "",
+            action_ema: str = "") -> ManagerBasedRlEnvCfg:
+    return stairs_env_cfg(asset=asset, play=play, sighted=True, stairs_row=stairs_row, action_ema=action_ema, free_climb=True)
 
 
 __all__ = ["env_cfg"]
