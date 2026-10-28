@@ -93,6 +93,15 @@ NOT_LOCOMOTION = {
     # listing them as exemptions would empty the parity test rather than
     # describe it.
     "jumper.posture",
+    # Up a staircase by jumping, warm-started from jumper.ref_free_jump: no
+    # command (the flight is the goal), no gait prior, a terrain of its own,
+    # 200 Hz control at kp=20 like the jump, and a reward budget of treads and
+    # flight rather than velocity tracking. `stairs_sighted` adds the height
+    # scan to the actor and `stairs_free` pays walked treads too; the three are
+    # each other's controls, not the four's.
+    "jumper.stairs",
+    "jumper.stairs_sighted",
+    "jumper.stairs_free",
 }
 
 #: Fields a task is allowed to differ on because **the gait fixes them**.
