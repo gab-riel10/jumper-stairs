@@ -64,9 +64,14 @@ def _names(model, kind, count) -> list[str]:
     return [mujoco.mj_id2name(model, kind, i) or "" for i in range(count)]
 
 
-def _scene_description(model, robot_bodies: set[int], repo: Path) -> dict:
+def _scene_description(model, prefix: str, repo: Path) -> dict:
     """The robot's visible geoms, each as a mesh file of this repository and the
     pose of **that file's own frame** in its body's frame.
+
+    `model` is the robot's own MJCF compiled alone, not the simulation's: the
+    native backend strips visual meshes from a model of many environments
+    (`native_sim._maybe_strip_visuals`), and a recording of 32 robots came out
+    with none. Body names get the scene's `prefix` (mjlab's `robot/`).
 
     MuJoCo re-centres a mesh on compile (`mesh_pos`, `mesh_quat`) and folds the
     shift into `geom_pos` / `geom_quat`, so the compiled geom pose applied to the
@@ -82,8 +87,7 @@ def _scene_description(model, robot_bodies: set[int], repo: Path) -> dict:
 
     bodies = _names(model, mujoco.mjtObj.mjOBJ_BODY, model.nbody)
     is_mesh = model.geom_type == mujoco.mjtGeom.mjGEOM_MESH
-    visual = [g for g in range(model.ngeom)
-              if int(model.geom_bodyid[g]) in robot_bodies and is_mesh[g] and model.geom_group[g] == 2]
+    visual = [g for g in range(model.ngeom) if is_mesh[g] and model.geom_group[g] == 2]
     geoms = []
     for g in visual:
         i = int(model.geom_dataid[g])
@@ -96,7 +100,7 @@ def _scene_description(model, robot_bodies: set[int], repo: Path) -> dict:
                        if f.as_posix().endswith(Path(raw).as_posix().lstrip("./")))
         geoms.append({
             "name": mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_GEOM, g) or "",
-            "body": bodies[int(model.geom_bodyid[g])],
+            "body": prefix + bodies[int(model.geom_bodyid[g])],
             "file": str(found[0].relative_to(repo)) if found else raw,
             "scale": [float(v) for v in model.mesh_scale[i]],
             "file_pos": [float(v) for v in pos],
@@ -158,6 +162,10 @@ def main() -> None:
 
         root = int(robot.data.indexing.root_body_id)
         robot_bodies = {b for b in range(model.nbody) if int(model.body_rootid[b]) == int(model.body_rootid[root])}
+        scene_body_names = _names(model, mujoco.mjtObj.mjOBJ_BODY, model.nbody)
+        from tasks.jumper.common.assets import JUMPER_XML
+
+        root_name = mujoco.mj_id2name(mujoco.MjModel.from_xml_path(str(JUMPER_XML)), mujoco.mjtObj.mjOBJ_BODY, 1)
         body_ids = sorted(robot_bodies)
 
         alive = torch.ones(n, dtype=torch.bool)
@@ -166,6 +174,7 @@ def main() -> None:
         t_takeoff = torch.full((n,), float("nan"))
         x_land = torch.full((n,), float("nan"))
         apex = torch.zeros(n)
+        was_flying = torch.zeros(n, dtype=torch.bool)
         qpos, qvel, bpos, bquat, qd, live_log = [], [], [], [], [], []
 
         def snapshot():
@@ -185,8 +194,11 @@ def main() -> None:
                 done = dones.bool().cpu() & alive
                 live_now = alive & ~done
                 flying = cmd.in_flight.cpu()
-                newly_up = flying & torch.isnan(t_takeoff) & live_now
+                # The start of the flight that ends in the first landing on the top:
+                # every takeoff before it (the drop from the spawn, a hop) is overwritten.
+                newly_up = flying & ~was_flying & torch.isnan(t_land) & live_now
                 t_takeoff = torch.where(newly_up, torch.full_like(t_takeoff, (i + 1) * dt), t_takeoff)
+                was_flying = flying.clone()
                 apex = torch.where(live_now, torch.maximum(apex, cmd.apex.cpu()), apex)
                 on1 = (cmd.k_base.cpu() >= 1) & ~flying & live_now
                 newly = on1 & torch.isnan(t_land)
@@ -240,9 +252,14 @@ def main() -> None:
                 "landing_depth_m": stairs.landing, "width_m": stairs.width,
                 "center_y": float(origin[1]),
             },
-            "robot": _scene_description(model, robot_bodies, Path(__file__).resolve().parents[1]),
+            "robot": _scene_description(mujoco.MjModel.from_xml_path(str(JUMPER_XML)),
+                                        scene_body_names[root].removesuffix(root_name),
+                                        Path(__file__).resolve().parents[1]),
             "jumps": [],
         }
+        unknown = {g["body"] for g in scene["robot"]["geoms"]} - set(scene["body_names"])
+        if unknown or not scene["robot"]["geoms"]:
+            raise RuntimeError(f"visible meshes on bodies the recording does not have: {sorted(unknown)[:5]}")
         for rank, (rms, neg_apex, e, end) in enumerate(kept, start=1):
             name = f"jump_{rank:02d}"
             np.savez_compressed(
@@ -253,11 +270,13 @@ def main() -> None:
                 body_pos=np.stack([q[e] for q in bpos[:end]]).astype(np.float32),
                 body_quat=np.stack([q[e] for q in bquat[:end]]).astype(np.float32),
             )
+            x_rest = float(qpos[end - 1][e][0]) - riser_x
             meta = {
                 "name": name, "env": e, "frames": end, "duration_s": end * dt,
                 "takeoff_s": float(t_takeoff[e]), "landing_s": float(t_land[e]),
                 "apex_cm": -neg_apex * 100.0,
                 "landing_past_riser_m": float(x_land[e]) - float(stairs.first_riser_from_origin),
+                "rest_past_riser_m": x_rest,
                 "post_landing_qd_rms": rms,
             }
             (a.out / f"{name}.json").write_text(json.dumps(meta, indent=2))
@@ -272,7 +291,8 @@ def main() -> None:
               f"noise {a.noise}: {attempts['on_top']}/{n} on top, {attempts['fell']} fell; kept {len(kept)}")
         for j in scene["jumps"]:
             print(f"  {j['name']}: env {j['env']:2d} takeoff {j['takeoff_s']:.2f} s land {j['landing_s']:.2f} s "
-                  f"apex {j['apex_cm']:.1f} cm landed {j['landing_past_riser_m']:.2f} m past the riser "
+                  f"apex {j['apex_cm']:.1f} cm landed {j['landing_past_riser_m']:.2f} m past the riser, "
+                  f"rests at {j['rest_past_riser_m']:.2f} m "
                   f"qd_rms {j['post_landing_qd_rms']:.3f}")
     finally:
         env.close()

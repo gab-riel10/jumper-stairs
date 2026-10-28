@@ -1,0 +1,12 @@
+{
+  "name": "jump_05",
+  "env": 21,
+  "frames": 1201,
+  "duration_s": 6.005,
+  "takeoff_s": 0.2849999964237213,
+  "landing_s": 0.5450000166893005,
+  "apex_cm": 19.928598403930664,
+  "landing_past_riser_m": 0.08133506774902344,
+  "rest_past_riser_m": 0.24280014634132385,
+  "post_landing_qd_rms": 0.44953757524490356
+}
