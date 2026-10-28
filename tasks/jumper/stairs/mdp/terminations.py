@@ -5,11 +5,11 @@ mounted in `env_cfg.py`. These two are the task's:
 
 - `off_side`: the base has left the flight sideways. The tile is 2 m wide and
   the stairs span all of it, so past this there is a drop to the border.
-- `fell_off`: the base is well below the tread the rear feet were last on --
+- `fell_off`: the base is well below the tread it was last over --
   off the cliff behind the top platform (`terrain.Staircase.tail`), or tumbled
   back down the flight. Two risers and a margin, so a landing one tread down,
   which the reward already charges, is not an ending.
-- `reached_top`: the rear feet are on the top platform and the robot has stood
+- `reached_top`: the base is over the top platform and the robot has stood
   there, grounded, for the command's `settle_steps`. Mounted as a **time-out**
   so PPO bootstraps from the value of standing at the top, where the climbed
   stream goes on paying: a success must not be worth less than loitering on

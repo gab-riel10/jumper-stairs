@@ -44,7 +44,7 @@ never passes `min_rise` is a hop: contact chatter reaches 1.3 mm and a push
 that unloads the feet without lifting the body about 9 mm (measured in
 `jumper.ref_free_jump`), and neither is a jump.
 
-A tread counts once, the first time the rear feet stand on it (`k_best`, the
+A tread counts once, the first time the base is over it (`k_best`, the
 episode's high-water mark). Reached at the touchdown of a jump, it is the
 jump's: `jump_gain` holds it for one step and `rewards.step_up_in_flight` pays
 it. Reached with a foot on the ground, or at the touchdown of a hop, it is a
@@ -65,7 +65,7 @@ episode that stands still at HOME earns the upright and settle terms alone.
 Per episode, zeroed at reset and logged as their mean by the command manager:
 `steps_by_flight`, `steps_crawled`, `jumps` (flights past `min_rise`),
 `apex_rise` (the episode's highest), `flight_s`, `max_step` (the highest tread
-the rear feet reached), `reached_top`, and `crawl_ratio` = crawled / (crawled +
+the base was over, spawn included), `reached_top`, and `crawl_ratio` = crawled / (crawled +
 jumped), 0 when nothing was climbed. `crawl_ratio` is the one to watch: a policy
 that climbs with it rising is walking up, whatever the reward says.
 """
@@ -111,7 +111,7 @@ class StairsCommandCfg(CommandTermCfg):
     """Consecutive grounded steps on the top platform that count as arrived."""
     free_climb: bool = False
     """Count crawled treads in `climbed_net` too. `jumper.stairs_free` sets it:
-    there a tread is a tread however the rear feet got onto it, and the task's
+    there a tread is a tread however the base got over it, and the task's
     `crawl` term pays it instead of charging it. The metrics stay as they are,
     so `crawl_ratio` still says how the climbing was done."""
 

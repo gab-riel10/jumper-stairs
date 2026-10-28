@@ -27,8 +27,8 @@ def _cmd(env, command_name: str):
 
 
 def step_up_in_flight(env, command_name: str = "stairs") -> torch.Tensor:
-    """New treads -- beyond the episode's high-water mark -- the rear feet stood
-    on at the touchdown of a jump, paid once. Never negative, never twice."""
+    """New treads -- beyond the episode's high-water mark -- the base was over
+    at the touchdown of a jump, paid once. Never negative, never twice."""
     return _cmd(env, command_name).jump_gain
 
 
@@ -48,7 +48,7 @@ def climbed_stream(env, command_name: str = "stairs") -> torch.Tensor:
 
 
 def crawl(env, command_name: str = "stairs") -> torch.Tensor:
-    """New treads the rear feet reached with a foot on the ground (or at the
+    """New treads the base reached with a foot on the ground (or at the
     touchdown of a hop), this step. Charged once and never paid afterwards.
     Mount it with a negative weight -- or, in `jumper.stairs_free`, with the
     jump's weight: there how a tread is gained is the robot's business."""

@@ -6,7 +6,7 @@ what this task is about, and the rule Rudin et al. 2021 use for their terrain
 curriculum (promote on progress, demote on the lack of it, both read off the
 episode just ended) rather than one that waits for the robot to settle first.
 
-A robot is promoted when its rear feet gained at least `promote_steps` treads
+A robot is promoted when its base gained at least `promote_steps` treads
 **in flight** (`steps_by_flight`, from the command term) over its last
 `window` episodes at this level, and the episode just ended was not a fall.
 It is demoted after `demote_falls` falls in a row, or `demote_zeros` episodes

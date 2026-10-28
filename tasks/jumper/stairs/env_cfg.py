@@ -1,7 +1,7 @@
 """jumper.stairs -- up a flight of stairs by jumping, on the robot's own senses.
 
 The robot starts at the foot of a straight staircase (or partway up it) and has
-the episode to get to the top. It is paid for treads its rear feet gain **while
+the episode to get to the top. It is paid for treads its base gains **while
 every foot is off the ground** and charged for treads they gain any other way,
 so the thing it is trained to do is bound: land, settle, crouch, push, fly,
 land one tread up. The riser height is a terrain curriculum from 2 cm to the
@@ -131,7 +131,7 @@ ELEVATED_FRACTION = 0.5
 MAX_START_STEP = 7
 
 # ── Rewards ──────────────────────────────────────────────────────────────────
-#: Per new tread the rear feet gained in a jump, once, at the touchdown.
+#: Per new tread the base gained in a jump, once, at the touchdown.
 #: Raised from 4 after the first 10 h on Kaggle (2026-10-27, both tasks, 2048
 #: envs): the blind policy settled at 1.0-1.5 treads per 8 s episode with the
 #: stream paying for the first one and nothing pressing for the next. Eight
