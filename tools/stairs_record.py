@@ -163,9 +163,12 @@ def main() -> None:
         root = int(robot.data.indexing.root_body_id)
         robot_bodies = {b for b in range(model.nbody) if int(model.body_rootid[b]) == int(model.body_rootid[root])}
         scene_body_names = _names(model, mujoco.mjtObj.mjOBJ_BODY, model.nbody)
-        from tasks.jumper.common.assets import JUMPER_XML
-
-        root_name = mujoco.mj_id2name(mujoco.MjModel.from_xml_path(str(JUMPER_XML)), mujoco.mjtObj.mjOBJ_BODY, 1)
+        # The robot's own MJCF, compiled alone: the entity's `spec_fn` builds it
+        # again from whatever `--model` the task was given, so this tool knows no
+        # asset path (`tests/test_layout.py` keeps `tools/` free of them). The
+        # live spec cannot be compiled once the scene has attached it.
+        robot_model = robot.cfg.spec_fn().compile()
+        root_name = mujoco.mj_id2name(robot_model, mujoco.mjtObj.mjOBJ_BODY, 1)
         body_ids = sorted(robot_bodies)
 
         alive = torch.ones(n, dtype=torch.bool)
@@ -252,8 +255,7 @@ def main() -> None:
                 "landing_depth_m": stairs.landing, "width_m": stairs.width,
                 "center_y": float(origin[1]),
             },
-            "robot": _scene_description(mujoco.MjModel.from_xml_path(str(JUMPER_XML)),
-                                        scene_body_names[root].removesuffix(root_name),
+            "robot": _scene_description(robot_model, scene_body_names[root].removesuffix(root_name),
                                         Path(__file__).resolve().parents[1]),
             "jumps": [],
         }
