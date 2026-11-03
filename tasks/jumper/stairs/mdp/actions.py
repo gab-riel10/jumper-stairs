@@ -20,8 +20,18 @@ leaves the jump. Whether it does is measured, not assumed: see
 What it leaves alone: the `actions` observation is the action manager's raw
 action, so a policy replayed through the filter sees its own last request,
 as it did in training. Trained with the filter on, it learns the lag, which is
-the point -- the robot's controller would apply the same filter (a
-`deploy/lib.rs` hook; not written yet).
+the point -- the robot's controller applies the same filter.
+
+On the robot: `deploy/fsm/src/action.rs` already runs a per-decode EMA on the
+target, `action_smoothing`, with the weight on the *previous* target, so this
+task's `alpha` is `1 - action_smoothing` (alpha 0.5 is `action_smoothing = 0.5`).
+Two things the export does not carry, as of 2026-11-03: the coefficient is a
+`--machine` setting (`deploy/BUNDLE.md`), one value for every mode of the bundle,
+not a field of this mode's contract; and the controller then rate-limits the
+target (`joint_pos_rate_limit`, per policy step; the example in
+`deploy/fsm/README.md` is 0.20 rad, 40 rad/s at 200 Hz) and clamps it to the
+joint limits, neither of which this term does -- see `env_cfg.py` for what the
+training clips.
 """
 
 from __future__ import annotations
