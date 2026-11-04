@@ -60,14 +60,37 @@ the impulse, is what makes a jump worth its risk: a step gained early pays for
 the rest of the episode, as `jumper.ref_free_jump`'s latched apex does, and an
 episode that stands still at HOME earns the upright and settle terms alone.
 
+## The second jump
+
+The stream is also what stopped the second jump. Measured on `model_6750` and
+`model_10650` (native:cpu, 16 robots, 16 s, alpha 0.5, 2026-11-03): one
+flight per episode on the 15 cm row **and on the 9 cm row** -- 0.42-0.47 s
+airborne in 16 s, every robot, both policies. Not a limit of the jump: a
+decision. After one tread at 0.7 s the stream has ~3000 steps x 1.0 left to
+pay; a second jump adds 8 at once and 1.0 a step, and a fall ends the episode
+and the stream with it. Standing wins unless the second jump succeeds more
+than about seven times in ten, and a policy that has never tried it is at zero.
+Two things here answer that, both read by `env_cfg.py`'s terms:
+
+- `jump_pay`: the n-th tread gained in flight this episode is worth
+  `1 + chain_bonus * (n - 1)` treads (`treads_jumped` counts them), so the
+  second is worth more than the first and the stream is not the only reason
+  to go on.
+- `steps_since_gain`: control steps since the last tread the base gained (or
+  since the spawn), which `terminations.stall` ends the episode on after
+  `STALL_S` seconds short of the top. Standing then earns at most that long a
+  stream; a new tread earns the tread and another window.
+
 ## Metrics
 
 Per episode, zeroed at reset and logged as their mean by the command manager:
 `steps_by_flight`, `steps_crawled`, `jumps` (flights past `min_rise`),
-`apex_rise` (the episode's highest), `flight_s`, `max_step` (the highest tread
-the base was over, spawn included), `reached_top`, and `crawl_ratio` = crawled / (crawled +
-jumped), 0 when nothing was climbed. `crawl_ratio` is the one to watch: a policy
-that climbs with it rising is walking up, whatever the reward says.
+`rejumps` (jumps after the episode's first), `chained` (1 when at least two
+treads were gained in flight), `apex_rise` (the episode's highest), `flight_s`,
+`max_step` (the highest tread the base was over, spawn included), `reached_top`,
+and `crawl_ratio` = crawled / (crawled + jumped), 0 when nothing was climbed.
+`crawl_ratio` is the one to watch: a policy that climbs with it rising is walking
+up, whatever the reward says. `chained` is the second-jump question itself.
 """
 
 from __future__ import annotations
@@ -132,6 +155,14 @@ class StairsCommandCfg(CommandTermCfg):
     """A foot site less than this above its own HOME height over the tread
     beneath it is on the ground, for `edge_feet` -- read off the geometry
     rather than the contact sensor, whose slot order is the model's."""
+    chain_bonus: float = 0.5
+    """How much more the n-th tread gained in flight is worth than the first:
+    `jump_pay` counts it as `1 + chain_bonus * (n - 1)` treads."""
+    rejump_min_rise: float = 0.05
+    """Metres of `lowest_rise` a flight needs to count in the `rejumps` metric:
+    a bound, not the 1-3 cm bounces `min_rise` admits as jumps (measured
+    2026-11-04 with `model_10650`, native:cpu, 64 robots: one such bounce in
+    the first 0.2 s of nearly every episode)."""
 
     def __post_init__(self):
         self.class_type = StairsCommand
@@ -158,6 +189,14 @@ class StairsCommand(CommandTerm):
         #: Tread the feet took off from, for the flight in progress.
         self.k_takeoff = zeros(torch.long)
         self.in_flight = zeros(torch.bool)
+        #: Whether a foot has been loaded since the reset. A reset drops the
+        #: robot the last centimetre onto the tread, and before 2026-11-04 that
+        #: drop was a flight -- the first touchdown's `lowest_rise` is the
+        #: spawn height, past `min_rise`, so every episode began with a "jump"
+        #: (C's `jumps` metric counted it; measured 2026-11-04, native:cpu, 64
+        #: robots: 1.0 jumps in the first 0.2 s from the landing). A flight now
+        #: starts only from the ground.
+        self.grounded_once = zeros(torch.bool)
         #: Peak of `lowest_rise` during the flight in progress.
         self.apex = zeros()
         #: The highest tread the base has been over this episode: the
@@ -186,6 +225,13 @@ class StairsCommand(CommandTerm):
         self._landings = zeros()
         #: Running total: jumped minus crawled, this episode.
         self.climbed_net = zeros()
+        #: Treads gained in flight this episode, and what the last touchdown's
+        #: were worth once the n-th is counted up (`chain_bonus`); one step.
+        self.treads_jumped = zeros()
+        self.jump_pay = zeros()
+        #: Control steps since the base last gained a tread, or since the spawn:
+        #: what `terminations.stall` reads.
+        self.steps_since_gain = zeros()
         self.top_steps = zeros()
         self.grounded_steps = zeros()
         #: The riser height of this environment's flight, refreshed every step
@@ -201,6 +247,8 @@ class StairsCommand(CommandTerm):
         self.metrics["steps_by_flight"] = zeros()
         self.metrics["steps_crawled"] = zeros()
         self.metrics["jumps"] = zeros()
+        self.metrics["rejumps"] = zeros()
+        self.metrics["chained"] = zeros()
         self.metrics["apex_rise"] = zeros()
         self.metrics["flight_s"] = zeros()
         self.metrics["max_step"] = zeros()
@@ -306,6 +354,7 @@ class StairsCommand(CommandTerm):
         self.k_feet[env_ids] = k.long()
         self.k_takeoff[env_ids] = k.long()
         self.in_flight[env_ids] = False
+        self.grounded_once[env_ids] = False
         self.apex[env_ids] = 0.0
         self.k_best[env_ids] = k.long()
         self.jump_gain[env_ids] = 0.0
@@ -321,6 +370,9 @@ class StairsCommand(CommandTerm):
         self._landing_dx_sum[env_ids] = 0.0
         self._landings[env_ids] = 0.0
         self.climbed_net[env_ids] = 0.0
+        self.treads_jumped[env_ids] = 0.0
+        self.jump_pay[env_ids] = 0.0
+        self.steps_since_gain[env_ids] = 0.0
         self.top_steps[env_ids] = 0.0
         self.grounded_steps[env_ids] = 0.0
 
@@ -341,6 +393,7 @@ class StairsCommand(CommandTerm):
         dt = self._env.step_dt
         # The one-step flags were read by this step's rewards; clear them.
         self.jump_gain.zero_()
+        self.jump_pay.zero_()
         self.crawl_gain.zero_()
         self.progress_gain.zero_()
         self.touchdown.zero_()
@@ -351,8 +404,9 @@ class StairsCommand(CommandTerm):
         k_new = self.stairs.step_index(x_base)
         k_feet = self.stairs.step_index(self.rear_x())
 
-        takeoff = ~self.in_flight & airborne
+        takeoff = ~self.in_flight & airborne & self.grounded_once
         touchdown = self.in_flight & ~airborne
+        self.grounded_once |= ~airborne
         # Takeoff: remember the tread under the feet, start the apex from nothing.
         self.k_takeoff.copy_(torch.where(takeoff, self.k_feet, self.k_takeoff))
         self.apex.masked_fill_(takeoff, 0.0)
@@ -380,6 +434,16 @@ class StairsCommand(CommandTerm):
         self.jump_gain.copy_(torch.where(jumped, gain, torch.zeros_like(gain)))
         self.crawl_gain.copy_(torch.where(~in_air | hopped, gain, torch.zeros_like(gain)))
         settled = jumped | ~in_air | hopped
+        # The n-th tread gained in flight is worth `1 + chain_bonus * (n - 1)`:
+        # with `n0` already gained, a touchdown that gains `g` more is worth
+        # sum over i = 1..g of (1 + chain_bonus * (n0 + i - 1)).
+        g = self.jump_gain
+        n0 = self.treads_jumped
+        bonus = self.cfg.chain_bonus
+        self.jump_pay.copy_(g + bonus * (n0 * g + 0.5 * g * (g - 1.0)))
+        self.treads_jumped += g
+        gained = settled & (gain > 0)
+        self.steps_since_gain.copy_(torch.where(gained, torch.zeros_like(self.steps_since_gain), self.steps_since_gain + 1.0))
         self.k_best.copy_(torch.where(settled, torch.maximum(self.k_best, k_new), self.k_best))
         self.touchdown.copy_(touchdown)
         self.in_flight &= ~touchdown
@@ -425,7 +489,12 @@ class StairsCommand(CommandTerm):
         m["steps_by_flight"] += self.jump_gain.clamp(min=0.0)
         m["progress_m"] += self.progress_gain
         m["steps_crawled"] += self.crawl_gain.clamp(min=0.0)
+        # A bound after the episode's first tread by jumping, whatever it gained;
+        # and the episode that has two treads by jumping: the second jump, as a rate.
+        bound = jumped & (self.apex >= self.cfg.rejump_min_rise)
+        m["rejumps"] += (bound & (self.treads_jumped - g > 0)).float()
         m["jumps"] += jumped.float()
+        m["chained"].copy_((self.treads_jumped >= 2.0).float())
         m["apex_rise"].copy_(torch.where(jumped, torch.maximum(m["apex_rise"], self.apex), m["apex_rise"]))
         m["flight_s"] += airborne.float() * dt
         m["edge_s"] += (self.edge_feet > 0).float() * dt

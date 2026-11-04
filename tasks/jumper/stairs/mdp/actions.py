@@ -74,8 +74,14 @@ class SmoothedJointPositionAction(JointPositionAction):
 
     def reset(self, env_ids: torch.Tensor | slice | None = None) -> None:
         super().reset(env_ids)
-        home = self._offset if self._offset.dim() == 2 else self._offset.expand_as(self._filtered)
-        self._filtered[env_ids] = home[env_ids]
+        # The filter starts from where the joints are, not from HOME: the same
+        # thing for a HOME spawn, and for a spawn in a recorded post-landing
+        # state (`events.py`) it keeps the first targets near the pose the
+        # policy was holding there instead of yanking every joint towards HOME
+        # for the three steps the low-pass takes to follow the policy.
+        if env_ids is None:
+            env_ids = slice(None)
+        self._filtered[env_ids] = self._entity.data.joint_pos[env_ids][:, self._target_ids]
 
 
 __all__ = ["SmoothedJointPositionAction", "SmoothedJointPositionActionCfg"]

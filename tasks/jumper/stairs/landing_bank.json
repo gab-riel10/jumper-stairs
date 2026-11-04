@@ -1,0 +1,40 @@
+{
+  "task": "jumper.stairs_free",
+  "checkpoints": {
+    "model_10650.pt": "fead0a04c032de6a718c9c3333d902ae94df70f16f25f70e6a67b19c321528bc",
+    "model_6750.pt": "76e4afa0152755394674c28751794aa5f190aeda8b37521db8a6de01371ae5bc"
+  },
+  "rows": "2-9",
+  "alpha": 0.5,
+  "num_envs": 16,
+  "seconds": 2.0,
+  "delays_s": [
+    0.3,
+    0.6
+  ],
+  "seed": 0,
+  "states": 482,
+  "per_run": {
+    "row2": 60,
+    "row3": 62,
+    "row4": 62,
+    "row5": 61,
+    "row6": 59,
+    "row7": 60,
+    "row8": 60,
+    "row9": 58
+  },
+  "date": "2026-11-04",
+  "command": "tools/stairs_landing_bank.py --task jumper.stairs_free --checkpoint model_10650.pt model_6750.pt --rows 2-9 --num-envs 16 --seconds 2 --out tasks/jumper/stairs/landing_bank",
+  "rel_pos_mean": [
+    0.023991191759705544,
+    -0.026014363393187523,
+    0.11278073489665985
+  ],
+  "rel_pos_std": [
+    0.03158225864171982,
+    0.08551210910081863,
+    0.005019809119403362
+  ],
+  "joint_vel_rms": 0.8791530132293701
+}

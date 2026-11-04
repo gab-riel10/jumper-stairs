@@ -28,8 +28,12 @@ def _cmd(env, command_name: str):
 
 def step_up_in_flight(env, command_name: str = "stairs") -> torch.Tensor:
     """New treads -- beyond the episode's high-water mark -- the base was over
-    at the touchdown of a jump, paid once. Never negative, never twice."""
-    return _cmd(env, command_name).jump_gain
+    at the touchdown of a jump, paid once. Never negative, never twice. In
+    tread-equivalents: the n-th tread of the episode counts as
+    `1 + chain_bonus * (n - 1)` (`StairsCommandCfg.chain_bonus`), so that the
+    second jump is worth more than the first (see `commands.py`, "The second
+    jump")."""
+    return _cmd(env, command_name).jump_pay
 
 
 def flight_progress(env, command_name: str = "stairs") -> torch.Tensor:

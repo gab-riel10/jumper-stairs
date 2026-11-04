@@ -26,6 +26,17 @@ checkpoint the target task *can* load strictly:
 - a fresh critic and a fresh optimizer, `iter = 0`, and no environment state,
   so the target's schedules start at the beginning.
 
+Two options for a source that is the **same task a few terms later** rather
+than another task -- the stairs on 2026-11-04, whose critic grew one input
+(`stairs_state`'s stall column) while its actor stayed the same:
+
+- `--critic graft`: copy the source's critic the way the actor is copied, by
+  name and overlap, instead of starting it fresh. Terms appended last get a
+  fresh column and the rest keep what they learnt, so the value function does
+  not have to be relearnt from noise.
+- `--keep-iter`: keep the source's iteration counter, so the curves continue
+  where the source's stopped and `--max-iterations` means what it did.
+
 The target environment is built once on the CPU with a handful of robots, which
 is the only way to know the target's observation widths. The native backend is
 enough for that: nothing is stepped.
@@ -72,6 +83,9 @@ def main() -> None:
     parser.add_argument("--model", default="jumper")
     parser.add_argument("--num-envs", type=int, default=4, help="robots in the throwaway build")
     parser.add_argument("--device", default="cpu")
+    parser.add_argument("--critic", choices=("fresh", "graft"), default="fresh",
+                        help="start the critic fresh (default) or copy the source's by name and overlap")
+    parser.add_argument("--keep-iter", action="store_true", help="keep the source's iteration counter")
     args = parser.parse_args()
 
     if not args.source.is_file():
@@ -123,13 +137,22 @@ def main() -> None:
     actor = {k: v.clone() for k, v in fresh["actor_state_dict"].items()}
     report = _graft(actor, {k: v.to("cpu") for k, v in source_actor.items()}, "actor")
 
+    critic = fresh["critic_state_dict"]
+    if args.critic == "graft":
+        source_critic = loaded.get("critic_state_dict")
+        if source_critic is None:
+            raise SystemExit("[warm_start] --critic graft: the source has no critic_state_dict")
+        critic = {k: v.clone() for k, v in critic.items()}
+        report += _graft(critic, {k: v.to("cpu") for k, v in source_critic.items()}, "critic")
+
+    iteration = int(loaded.get("iter") or 0) if args.keep_iter else 0
     out = {
         "actor_state_dict": actor,
-        "critic_state_dict": fresh["critic_state_dict"],
+        "critic_state_dict": critic,
         "optimizer_state_dict": fresh["optimizer_state_dict"],
-        "iter": 0,
+        "iter": iteration,
         "infos": {"warm_start": {"task": spec.id, "source": str(args.source),
-                                 "source_iter": loaded.get("iter")}},
+                                 "source_iter": loaded.get("iter"), "critic": args.critic}},
     }
     args.out.parent.mkdir(parents=True, exist_ok=True)
     torch.save(out, args.out)
@@ -137,7 +160,7 @@ def main() -> None:
     widths = {k: tuple(v.shape) for k, v in actor.items() if k.endswith("mlp.0.weight") or k == "obs_normalizer._mean"}
     print("[warm_start] target actor input widths:", widths)
     print("\n".join(report))
-    print(f"[warm_start] wrote {args.out} (iter 0, fresh critic and optimizer)")
+    print(f"[warm_start] wrote {args.out} (iter {iteration}, {args.critic} critic, fresh optimizer)")
     print(f"[warm_start] next: python scripts/train.py --task {spec.id} --checkpoint {args.out} ...")
 
 

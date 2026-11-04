@@ -14,6 +14,14 @@ mounted in `env_cfg.py`. These two are the task's:
   so PPO bootstraps from the value of standing at the top, where the climbed
   stream goes on paying: a success must not be worth less than loitering on
   the last tread (`jumper.ref_free_jump` ends `back_home` the same way).
+- `stall`: `stall_s` seconds since the base last gained a tread (or since the
+  spawn) with none gained, short of the top and not in the air. Mounted as a
+  **termination**, not a time-out, on purpose: it is the end of the climbed
+  stream, and a bootstrap from the value of standing would hand the stream
+  back. The measurement behind it is in `commands.py` ("The second jump"):
+  with the stream running to the end of a 16 s episode, neither policy ever
+  jumped twice, on any riser. Training only; `env_cfg.py` leaves it out of
+  replays, so a recording shows what the policy does when nothing ends it.
 """
 
 from __future__ import annotations
@@ -41,4 +49,10 @@ def reached_top(env, command_name: str = "stairs") -> torch.Tensor:
     return env.command_manager.get_term(command_name).arrived
 
 
-__all__ = ["fell_off", "off_side", "reached_top"]
+def stall(env, command_name: str = "stairs", stall_s: float = 3.0) -> torch.Tensor:
+    cmd = env.command_manager.get_term(command_name)
+    idle = cmd.steps_since_gain * env.step_dt >= stall_s
+    return idle & ~cmd.on_top & ~cmd.in_flight
+
+
+__all__ = ["fell_off", "off_side", "reached_top", "stall"]

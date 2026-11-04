@@ -35,6 +35,23 @@ The ground scan ahead (`terrain_scan`, critic-only, the asymmetric arrangement
 loaded, and the command's bookkeeping (`mdp/observations.py`). All of it is
 discarded at export.
 
+## The second jump (2026-11-04)
+
+`model_6750` (C) and `model_10650` jump one riser and then stand: one flight in
+16 s, on the 15 cm row and on the 9 cm row alike (`mdp/commands.py`, "The
+second jump"). Four things changed for it, each measured first:
+
+- `terminations.stall` (`STALL_S`): an episode short of the top ends 3 s after
+  the last tread gained. The climbed stream paid ~3000 for standing after one
+  tread and nothing for a fall; now standing pays 3 s of it.
+- `CHAIN_BONUS`: the n-th tread gained in flight is worth `1 + 0.5 (n - 1)`.
+- A quarter of the episodes start in a recorded post-landing state
+  (`LANDED_FRACTION`, `LANDING_BANK`, `mdp/events.py`).
+- Targets clipped to the joint limits (`CLIP_TARGETS_TO_JOINT_LIMITS`), as the
+  controller clips them.
+
+And the terrain rows now survive a resume (`mdp/curriculum.py`, `rl_cfg.py`).
+
 ## On the numbers
 
 The physics and the hardware facts are measured, or taken from where they are.
@@ -76,6 +93,7 @@ from ..common.constants import (
     PUSH_VELOCITY_RANGE,
     TIP_LINKS,
     get_jumper_robot_cfg,
+    get_spec,
 )
 from ..common.mdp.observations import actuator_force
 from ..common.tof import tof_sensor
@@ -135,9 +153,23 @@ SCAN_MAX_DIST = 2.0
 #: Half the episodes start on a tread 1..7 rather than on the landing, so the
 #: upper treads and their landings are practised before the policy can reach
 #: them from the bottom -- `jumper.ref_free_jump`'s `RSI_FRACTION`, with the
-#: same argument. `play` spawns everyone on the landing.
-ELEVATED_FRACTION = 0.5
+#: same argument. Of that half, since 2026-11-04, half again start **in the
+#: state a landing leaves** (`mdp/events.py`, `LANDING_BANK`) rather than at
+#: HOME: measured on `model_6750` and `model_10650` (2026-11-03, native:cpu),
+#: a robot spawned at HOME on a tread jumps at once and a robot that has just
+#: landed never jumps again, and the second is the state the second jump
+#: starts from. `play` spawns everyone on the landing.
+ELEVATED_FRACTION = 0.25
+LANDED_FRACTION = 0.25
 MAX_START_STEP = 7
+#: Spawn jitter about the tread's centre (HOME spawns only; a bank state
+#: carries its own offset).
+SPAWN_XY_JITTER = 0.05
+SPAWN_YAW_JITTER_DEG = 10.0
+#: States 0.3 s and 0.6 s after a tread-gaining touchdown of `model_10650` and
+#: `model_6750`, rows 2-9 (`tools/stairs_landing_bank.py`; the `.json` beside
+#: it has the checkpoints' sha256 and the counts).
+LANDING_BANK = Path(__file__).with_name("landing_bank.npz")
 
 # ── Rewards ──────────────────────────────────────────────────────────────────
 #: Per new tread the base gained in a jump, once, at the touchdown.
@@ -147,6 +179,13 @@ MAX_START_STEP = 7
 #: is what the stream pays in eight steps: the next tread has to be worth
 #: taking at once, not only over the rest of the episode.
 STEP_UP_WEIGHT = 8.0
+#: The n-th tread gained in flight in one episode counts as
+#: `1 + CHAIN_BONUS * (n - 1)` treads of `STEP_UP_WEIGHT`: 8, 12, 16, ... The
+#: second jump was never made (2026-11-03: `model_6750` and `model_10650`,
+#: one flight in 16 s on every riser, see `mdp/commands.py`), and the stream
+#: gave no reason to make it; the n-th tread paying more is the reason, with
+#: `STALL_S` taking the alternative away.
+CHAIN_BONUS = 0.5
 #: Per metre of new ground the base lands on at a jump's touchdown, beyond the
 #: furthest it has been this episode: the tread credit's rate (8 per 0.4 m),
 #: paid for the part of a tread as well. Added after 2.25 h of the second
@@ -189,6 +228,10 @@ CLIMBED_STREAM_WEIGHT = 1.0
 #: Per new tread gained with a foot down: what the jump's impulse pays, with
 #: the sign turned. A crawled tread also never enters the stream.
 CRAWL_WEIGHT = -8.0
+#: ...and in `jumper.stairs_free`, where a crawled tread is a tread: the
+#: jump's weight, with the sign kept. That task's one reward decision, named
+#: here because the three stairs tasks share this file as their config.
+CRAWL_WEIGHT_FREE = STEP_UP_WEIGHT
 #: Once, on the step the robot has settled on the top platform: the flight as a
 #: goal (arXiv 2402.06143's position framing), worth two and a half treads.
 REACHED_TOP_WEIGHT = 20.0
@@ -262,10 +305,45 @@ ACTION_EMA_ALPHA = 0.5
 #: what this robot's jump was trained against, and stays.
 JOINT_VEL_WEIGHT = -1.0e-4
 
+#: The targets handed to the actuators are clipped to the joint limits, as the
+#: robot's controller clips them (`deploy/fsm/src/action.rs`: smooth, rate-limit,
+#: clamp). Measured before this (2026-11-03, native:cpu, 16 robots, 15 cm kerb):
+#: `model_6750` asked up to 1.0 rad past a stop and `model_10650` up to 1.7, in
+#: the push, on the `*_J2_joint` knees, for 0.4-0.8 % of (step, joint) pairs
+#: and 0 % after the landing; replayed with the clamp both still climbed 100 %
+#: (apex 19.9 and 20.3 cm against 19.4 and 21.0). The clip costs the jump
+#: nothing in simulation and makes it the jump the controller will run. What
+#: Crabcraft found with its spins (kubony/crabcraft, README): targets 1.7 rad
+#: past the stops until they trained with the clamp.
+CLIP_TARGETS_TO_JOINT_LIMITS = True
+
+# ── The bookkeeping (`mdp/commands.py`) ──────────────────────────────────────
+#: A foot under this many newtons is in the air (`jump_eval.py`'s reading).
+FOOT_FORCE_THRESHOLD = 1.0
+#: Metres the lowest point must rise above the takeoff tread for a flight to be
+#: a jump rather than a hop: contact chatter reaches 1.3 mm and a push that
+#: unloads the feet without lifting the body about 9 mm (`jumper.ref_free_jump`).
+MIN_RISE = 0.01
+#: A foot site less than this above its own HOME height is on the ground, for
+#: the edge count.
+FOOT_TOUCH_HEIGHT = 0.012
+#: Grounded steps after a jump's touchdown before the landing is scored: the
+#: first contact is the front feet, with the body still moving.
+LANDING_SETTLE_STEPS = 40
+#: A flight counts in the `rejumps` metric from this much `lowest_rise`: a
+#: bound, not a bounce (the policies bounce 1-3 cm right after a spawn).
+REJUMP_MIN_RISE = 0.05
+
 # ── Terminations ─────────────────────────────────────────────────────────────
 FELL_OVER_RAD = math.radians(50.0)
 OFF_SIDE_M = 0.7
 SETTLE_STEPS = 20
+#: Seconds since the last tread gained (or the spawn) after which an episode
+#: short of the top ends, as a termination (`mdp/terminations.py`). Three: a
+#: bound every two seconds was the design, a landing settles in 0.5 s and the
+#: first jump from the landing leaves at 0.28 s (2026-11-03), so there is a
+#: second of slack. Training only.
+STALL_S = 3.0
 
 #: Sixteen seconds since C (2026-10-27) made one jump an episode in eight: room
 #: to land, reposition and go again. Eight treads at one bound every two seconds.
@@ -330,6 +408,24 @@ def _stride_history(cfg: ManagerBasedRlEnvCfg) -> None:
             }
             term.func = StridedHistory
             term.noise = None
+
+
+def _joint_limits(asset: Path | None) -> dict[str, tuple[float, float]]:
+    """Every limited hinge's range from the robot's own MJCF (`--model` or the
+    default), by joint name, for the action clip. Compiled once per build; the
+    same source `scripts/export.py` writes `joint_limits` from."""
+    import mujoco
+
+    model = get_spec(asset).compile()
+    limits = {}
+    for j in range(model.njnt):
+        if model.jnt_type[j] == mujoco.mjtJoint.mjJNT_HINGE and model.jnt_limited[j]:
+            name = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_JOINT, j)
+            limits[name] = (float(model.jnt_range[j, 0]), float(model.jnt_range[j, 1]))
+    missing = [j for j in GAIT_JOINTS if j not in limits]
+    if missing:
+        raise ValueError(f"[stairs] these gait joints have no limited range in the model: {missing}")
+    return limits
 
 
 def _pin_row(generator, row: str, stairs: Staircase = STAIRS):
@@ -516,10 +612,11 @@ def env_cfg(
     )
     cfg.observations["critic"].terms["stairs_state"] = ObservationTermCfg(
         func=stairs_mdp.observations.stairs_state,
-        params={"command_name": "stairs", "rise_scale": FLIGHT_HEIGHT_SCALE, "mirror_kind": "scalar"},
+        params={"command_name": "stairs", "rise_scale": FLIGHT_HEIGHT_SCALE, "stall_s": STALL_S,
+                "mirror_kind": "scalar"},
     )
 
-    # ── Action: absolute targets around HOME, optionally low-passed ───────────
+    # ── Action: absolute targets around HOME, low-passed, inside the limits ───
     alpha = float(action_ema) if str(action_ema).strip() else ACTION_EMA_ALPHA
     base_action = cfg.actions["joint_pos"]
     joint_pos_action = stairs_mdp.actions.SmoothedJointPositionActionCfg(
@@ -531,17 +628,29 @@ def env_cfg(
     joint_pos_action.actuator_names = list(GAIT_JOINTS)
     joint_pos_action.scale = {j: ACTION_SCALE for j in GAIT_JOINTS}
     joint_pos_action.use_default_offset = True
+    if CLIP_TARGETS_TO_JOINT_LIMITS:
+        # mjlab clips the processed action, i.e. the target after scale and
+        # offset, so the limits go in as they are. The robot's own MJCF says
+        # what they are; `layout.json`'s `joint_limits` come from the same place.
+        joint_pos_action.clip = {f"^{name}$": (lo, hi) for name, (lo, hi) in _joint_limits(asset).items()
+                                 if name in GAIT_JOINTS}
 
     # ── Command: the bookkeeping ──────────────────────────────────────────────
     cfg.commands = {
         "stairs": stairs_mdp.commands.StairsCommandCfg(
             entity_name="robot",
             stairs=stairs,
+            force_threshold=FOOT_FORCE_THRESHOLD,
+            min_rise=MIN_RISE,
             settle_steps=SETTLE_STEPS,
             free_climb=free_climb,
             progress_to_centre=PROGRESS_TO_CENTRE,
             landing_sigma=LANDING_SIGMA,
+            landing_settle_steps=LANDING_SETTLE_STEPS,
             edge_margin=EDGE_MARGIN,
+            foot_touch_height=FOOT_TOUCH_HEIGHT,
+            chain_bonus=CHAIN_BONUS,
+            rejump_min_rise=REJUMP_MIN_RISE,
         )
     }
 
@@ -558,7 +667,7 @@ def env_cfg(
                                         params={"command_name": "stairs"}),
         "climbed_stream": RewardTermCfg(func=R.climbed_stream, weight=CLIMBED_STREAM_WEIGHT,
                                         params={"command_name": "stairs"}),
-        "crawl": RewardTermCfg(func=R.crawl, weight=STEP_UP_WEIGHT if free_climb else CRAWL_WEIGHT,
+        "crawl": RewardTermCfg(func=R.crawl, weight=CRAWL_WEIGHT_FREE if free_climb else CRAWL_WEIGHT,
                                params={"command_name": "stairs"}),
         "reached_top": RewardTermCfg(func=R.reached_top, weight=REACHED_TOP_WEIGHT,
                                      params={"command_name": "stairs"}),
@@ -603,6 +712,8 @@ def env_cfg(
         "fell_over": TerminationTermCfg(func=mdp.bad_orientation, params={"limit_angle": FELL_OVER_RAD}),
         "off_side": TerminationTermCfg(func=stairs_mdp.terminations.off_side, params={"limit": OFF_SIDE_M}),
         "fell_off": TerminationTermCfg(func=stairs_mdp.terminations.fell_off, params={"command_name": "stairs"}),
+        "stall": TerminationTermCfg(func=stairs_mdp.terminations.stall,
+                                    params={"command_name": "stairs", "stall_s": STALL_S}),
     }
 
     # ── Events ────────────────────────────────────────────────────────────────
@@ -617,7 +728,9 @@ def env_cfg(
         "reset_on_tread": EventTermCfg(
             func=stairs_mdp.events.reset_on_tread, mode="reset",
             params={"stairs": stairs, "elevated_fraction": ELEVATED_FRACTION,
-                    "max_start_step": MAX_START_STEP},
+                    "landed_fraction": LANDED_FRACTION, "bank": str(LANDING_BANK),
+                    "max_start_step": MAX_START_STEP, "xy_jitter": SPAWN_XY_JITTER,
+                    "yaw_jitter": math.radians(SPAWN_YAW_JITTER_DEG)},
         ),
         **cfg.events,
     }
@@ -632,6 +745,10 @@ def env_cfg(
         cfg.observations["actor"].enable_corruption = False
         cfg.events.pop("push_robot", None)
         cfg.events["reset_on_tread"].params["elevated_fraction"] = 0.0
+        cfg.events["reset_on_tread"].params["landed_fraction"] = 0.0
+        # A replay shows what the policy does when nothing ends the episode
+        # for standing still; the stall is a training device.
+        cfg.terminations.pop("stall", None)
         # Keep the ladder: `--terrain-row` has no meaning here, so a replay
         # shows every row. The curriculum still moves robots on the evidence.
         cfg.scene.sensors = (cfg.scene.sensors or ()) + (tof_sensor(),)
