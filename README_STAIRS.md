@@ -1,10 +1,12 @@
 # Stairs by jumping — `jumper.stairs`, `jumper.stairs_sighted`, `jumper.stairs_free`
 
-A private working copy of [KingKongRobotics/jumper](https://github.com/KingKongRobotics/jumper)
+A working copy of [KingKongRobotics/jumper](https://github.com/KingKongRobotics/jumper)
 (Apache-2.0, see `LICENSE`) for the Crab Robot Open-source Challenge 2026: teach the
 Jumper hexapod (10.7 cm tall) to climb a straight staircase — real step 15 cm rise,
 40 cm tread — by **jumping**. Everything added is on branch `stairs-task`, on top of
 upstream commit `b2e5866`; the commit history says what changed and why.
+
+Developed with AI assistance (Claude).
 
 ## The three tasks
 
