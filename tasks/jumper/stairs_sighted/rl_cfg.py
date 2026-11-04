@@ -23,3 +23,12 @@ def agent_cfg() -> RslRlOnPolicyRunnerCfg:
         learning_rate=3.0e-4,
         max_iterations=20_000,
     )
+
+
+def runner_cls() -> type:
+    """`common/runner.py`'s runner, whose checkpoints carry the terrain rows
+    (`mdp/curriculum.py`, "Across a resume"). Before 2026-11-04 the stairs
+    trained through the default runner and every resume started at row 0."""
+    from ..common.runner import CurriculumRunner
+
+    return CurriculumRunner

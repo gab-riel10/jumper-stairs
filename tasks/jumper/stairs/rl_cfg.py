@@ -35,3 +35,12 @@ def agent_cfg() -> RslRlOnPolicyRunnerCfg:
         # Runs are cut by the clock on a free GPU; this is a ceiling, not a plan.
         max_iterations=20_000,
     )
+
+
+def runner_cls() -> type:
+    """`common/runner.py`'s runner, whose checkpoints carry the terrain rows
+    (`mdp/curriculum.py`, "Across a resume"). Before 2026-11-04 the stairs
+    trained through the default runner and every resume started at row 0."""
+    from ..common.runner import CurriculumRunner
+
+    return CurriculumRunner
